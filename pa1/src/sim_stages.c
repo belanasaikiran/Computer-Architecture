@@ -32,6 +32,8 @@ struct State fetch(struct State fetch_out) {
     /**
      * TODO: Your logic for fetch stage here.
      */
+    // R-Type Instructions: ADD, SUB, AND, OR, XOR, SLT, SLL, SRL
+    unsigned int fetch_out_temp = memory[pc / 4];
 
     //Return the instruction
     return fetch_out_temp;
