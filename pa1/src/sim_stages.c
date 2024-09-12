@@ -34,7 +34,6 @@ struct State fetch(struct State fetch_out) {
      */
 
     unsigned int inst;
-    char inst_type;
     if (pc == 0) {
         inst = 0; // Set instruction to 0 when pc is 0
     } else {
@@ -44,23 +43,27 @@ struct State fetch(struct State fetch_out) {
 
     // R-Type Instructions: ADD, SUB, AND, OR, XOR, SLT, SLL, SRL
     unsigned int inst_addr = pc;
-    unsigned int opcode = inst & 0x7F; // 0x7F = 0111 1111 - has 7 bits set to 1
-    unsigned int rd = (inst >> 7) & 0x1F; // 0x1F = 0001 1111 - has 5 bits set to 1
-    unsigned int funct3 = (inst >> 12) & 0x7; // 0x7 = 0000 0111 - has 3 bits set to 1
-    unsigned int rs1 = (inst >> 15) & 0x1F; // 0x1F = 0001 1111 - has 5 bits set to 1
-    unsigned int rs2 = (inst >> 20) & 0x1F; // 0x1F = 0001 1111 - has 5 bits set to 1
-    unsigned int funct7 = (inst >> 25) & 0x7F; // 0x7F = 0111 1111 - has 7 bits set to 1
+    unsigned int opcode = inst & bit_6_downto_0;
+    unsigned int rd = (inst >> 7) & bit_4_downto_0; // 0x1F = 0001 1111 - has 5 bits set to 1
+    unsigned int funct3 = (inst >> 12) & bit_2_downto_0; // 0x7 = 0000 0111 - has 3 bits set to 1
+    unsigned int rs1 = (inst >> 15) & bit_4_downto_0; // 0x1F = 0001 1111 - has 5 bits set to 1
+    unsigned int rs2 = (inst >> 20) & bit_4_downto_0; // 0x1F = 0001 1111 - has 5 bits set to 1
+    unsigned int funct7 = (inst >> 25) & bit_6_downto_0; // 0x7F = 0111 1111 - has 7 bits set to 1
+    
+    
+    unsigned int imm = 0;
 
     // I-Type Instructions:  LW, ADDI, ANDI, ORI, XORI, SLTI, SLLI, SRLI
-    unsigned int imm = (signed)(inst & 0xFFF00000) >> 20; // 0xFFF0000 = 1111 1111 1111 0000 0000 0000 0000 0000 - has 12 bits set to 1
-
-    // S-Type Instructions - SW - Store Word
-    // Combining the offset bits 31-25 and 11-7
-    // unsigned int imm_s = imm | ((inst & 0x0000780) >> 7); // 0xFE00000 = 1111 1110 0000 0000 0000 0000 0000 0000 - has 25 bits set to 1
-
-    // U-Type Instructions - LUI - Load Upper Immediate
-    // unsigned int imm_u = inst & 0xFFFFF000; // 0xFFFFF000 = 1111 1111 1111 1111 0000 0000 0000 0000 - has 20 bits set to 1
-
+    if (opcode == ITYPE_ARITH || ITYPE_LOAD)
+        imm = (signed)(inst & bit_31_downto_20) >> 20; // 0xFFF0000 = 1111 1111 1111 0000 0000 0000 0000 0000 - has 12 bits set to 1
+    else if (opcode == STYPE) // S-Type Instructions: SW
+        imm = ((signed)(inst & bit_31_downto_25) >> 20) | ((inst & bit_11_downto_7) >> 7); // Right shift 20 bits and OR with the offset bits 31-25 and 11-7. We do right shift 20 bits beacuse the remaining 5 bits are for 11-7 offset bits.
+    else if (opcode == LUI) // U-Type Instructions: LUI
+        imm = inst & bit_31_downto_12; 
+    else 
+        imm = 0; // Set immediate to 0 for all other instructions
+    
+    
 
     printf("Instruction: %x\n", inst);
     printf("Instruction Address: %x\n", inst_addr);
@@ -93,16 +96,17 @@ struct State decode(struct State fetch_out) {
      * TODO: Your code for the decode stage here.
     */
 
+   decode_fields(&fetch_out);
     // determine the instruction type based on the opcode
     switch (fetch_out.opcode)
     {
     
-    case 0x33: // R-Type Instructions - opcode = 0x33
+    case RTYPE: // R-Type Instructions - opcode = 0x33
         fetch_out.alu_in1 = registers[fetch_out.rs1];
         fetch_out.alu_in2 = registers[fetch_out.rs2];
         break;
         
-    case 0x13 || 0x3: // I-Type Instructions - opcode = 0x13 or 0x3
+    case ITYPE_LOAD || ITYPE_ARITH: // I-Type Instructions - opcode = 0x13 or 0x3
         fetch_out.alu_in1 = registers[fetch_out.rs1];
         fetch_out.alu_in2 = fetch_out.imm;
     
@@ -110,7 +114,8 @@ struct State decode(struct State fetch_out) {
 
     case 0x23: // S-Type Instructions - opcode = 0x23
         fetch_out.alu_in1 = registers[fetch_out.rs1];
-        fetch_out.alu_in2 = fetch_out.imm | ((fetch_out.imm & 0x0000780) >> 7);
+
+
 
         break;
 
