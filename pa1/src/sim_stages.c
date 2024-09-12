@@ -100,33 +100,18 @@ struct State decode(struct State fetch_out) {
     // determine the instruction type based on the opcode
     switch (fetch_out.opcode)
     {
-    
-    case RTYPE: // R-Type Instructions - opcode = 0x33
-        fetch_out.alu_in1 = registers[fetch_out.rs1];
-        fetch_out.alu_in2 = registers[fetch_out.rs2];
-        break;
-        
-    case ITYPE_LOAD || ITYPE_ARITH: // I-Type Instructions - opcode = 0x13 or 0x3
-        fetch_out.alu_in1 = registers[fetch_out.rs1];
-        fetch_out.alu_in2 = fetch_out.imm;
-    
-        break;
+        case RTYPE: // R-Type Instructions - opcode = 0x33
+            fetch_out.alu_in1 = registers[fetch_out.rs1];
+            fetch_out.alu_in2 = registers[fetch_out.rs2];
+            break;
+            
+        case ITYPE_LOAD || ITYPE_ARITH || STYPE || LUI: // I-Type Instructions - opcode = 0x13 or 0x3
+            fetch_out.alu_in1 = registers[fetch_out.rs1];
+            fetch_out.alu_in2 = fetch_out.imm;
+            break;
 
-    case 0x23: // S-Type Instructions - opcode = 0x23
-        fetch_out.alu_in1 = registers[fetch_out.rs1];
-
-
-
-        break;
-
-    case 0x37: // U-Type Instructions - opcode = 0x37
-        fetch_out.alu_in1 = 0;
-        fetch_out.alu_in2 = fetch_out.inst & 0xFFFFF000; 
-
-        break;
-
-    default:
-        break;
+        default:
+            break;
     }    
     
     
@@ -143,7 +128,6 @@ struct State execute(struct State decode_out) {
     */
 
    // execute the instruction
-    printf("Executing instruction\n");
 
 
 
