@@ -40,7 +40,7 @@ void decode_fields(struct State *ptr)
 
         case STYPE:
             ptr->imm = ((signed)(inst & bit_31_downto_25) >> 20) | // 0xFE00000
-                                    ((inst & bit_10_downto_7) >> 7); // 0x0000780
+                                    ((inst & bit_11_downto_7) >> 7); // 0x0000780
         break;
 
         case BTYPE:
