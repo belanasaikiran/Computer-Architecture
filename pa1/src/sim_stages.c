@@ -33,55 +33,22 @@ struct State fetch(struct State fetch_out) {
      * TODO: Your logic for fetch stage here.
      */
 
-    unsigned int inst;
-    if (pc == 0) {
-        inst = 0; // Set instruction to 0 when pc is 0
-    } else {
-        inst = memory[pc / 4];
-    }
+   if (pipe_stall == 1){
+    return fetch_out;
+   } 
 
+    //Use the current PC to store i) The instruction ii) The instruction address
+    struct State fetch_out_temp = {0};  // Initialize to zero
+    fetch_out_temp.inst = memory[pc / 4];
+    fetch_out_temp.inst_addr = pc;
 
-    // R-Type Instructions: ADD, SUB, AND, OR, XOR, SLT, SLL, SRL
-    unsigned int inst_addr = pc;
-    unsigned int opcode = inst & bit_6_downto_0;
-    unsigned int rd = (inst >> 7) & bit_4_downto_0; // 0x1F = 0001 1111 - has 5 bits set to 1
-    unsigned int funct3 = (inst >> 12) & bit_2_downto_0; // 0x7 = 0000 0111 - has 3 bits set to 1
-    unsigned int rs1 = (inst >> 15) & bit_4_downto_0; // 0x1F = 0001 1111 - has 5 bits set to 1
-    unsigned int rs2 = (inst >> 20) & bit_4_downto_0; // 0x1F = 0001 1111 - has 5 bits set to 1
-    unsigned int funct7 = (inst >> 25) & bit_6_downto_0; // 0x7F = 0111 1111 - has 7 bits set to 1
-    
-    
-    unsigned int imm = 0;
-
-    // I-Type Instructions:  LW, ADDI, ANDI, ORI, XORI, SLTI, SLLI, SRLI
-    if (opcode == ITYPE_ARITH || ITYPE_LOAD)
-        imm = (signed)(inst & bit_31_downto_20) >> 20; // 0xFFF0000 = 1111 1111 1111 0000 0000 0000 0000 0000 - has 12 bits set to 1
-    else if (opcode == STYPE) // S-Type Instructions: SW
-        imm = ((signed)(inst & bit_31_downto_25) >> 20) | ((inst & bit_11_downto_7) >> 7); // Right shift 20 bits and OR with the offset bits 31-25 and 11-7. We do right shift 20 bits beacuse the remaining 5 bits are for 11-7 offset bits.
-    else if (opcode == LUI) // U-Type Instructions: LUI
-        imm = inst & bit_31_downto_12; 
-    else 
-        imm = 0; // Set immediate to 0 for all other instructions
-    
-    
-
-    printf("Instruction: %x\n", inst);
-    printf("Instruction Address: %x\n", inst_addr);
-    printf("Opcode: %x\n", opcode);
-    printf("Funct3: %x\n", funct3);
-    printf("Funct7: %x\n", funct7);
-    printf("RD: %x\n", rd);
-    printf("RS1: %x\n", rs1);
-    printf("RS2: %x\n", rs2);
-    printf("Immediate: %x\n", imm);
+    // pipe_stall = 1;
 
 
 
     //Advance the (next) PC
-    advance_pc(inst_addr + 4);
+    advance_pc(fetch_out.inst_addr + 4);
 
-    //Use the current PC to store i) The instruction ii) The instruction address
-    struct State fetch_out_temp = {inst, inst_addr, opcode, funct3, funct7, rd, rs1, rs2, imm};
 
     //Return the instruction
     return fetch_out_temp;
@@ -96,7 +63,30 @@ struct State decode(struct State fetch_out) {
      * TODO: Your code for the decode stage here.
     */
 
-   decode_fields(&fetch_out);
+    // Decode stage
+    printf("******** Decoding:  *********\n");
+
+
+
+
+   
+    decode_fields(&fetch_out);
+
+    printf("Instruction: %x\n", fetch_out.inst);
+    printf("Instruction Address: %x\n", fetch_out.inst_addr);
+    printf("Opcode: %x\n", fetch_out.opcode);
+    printf("Funct3: %x\n", fetch_out.funct3);
+    printf("Funct7: %x\n", fetch_out.funct7);
+    printf("RD: %x\n", fetch_out.rd);
+    printf("RS1: %x\n", fetch_out.rs1);
+    printf("RS2: %x\n", fetch_out.rs2);
+    printf("Immediate: %x\n", fetch_out.imm);
+
+    if (fetch_out.opcode == LUI) // U-Type Instructions: LUI
+        fetch_out.imm = fetch_out.inst & bit_31_downto_12; 
+
+
+
     // determine the instruction type based on the opcode
     switch (fetch_out.opcode)
     {
@@ -105,7 +95,10 @@ struct State decode(struct State fetch_out) {
             fetch_out.alu_in2 = registers[fetch_out.rs2];
             break;
             
-        case ITYPE_LOAD || ITYPE_ARITH || STYPE || LUI: // I-Type Instructions - opcode = 0x13 or 0x3
+        case ITYPE_LOAD:
+        case ITYPE_ARITH:
+        case STYPE:
+        case LUI: // I-Type Instructions - opcode = 0x13 or 0x3
             fetch_out.alu_in1 = registers[fetch_out.rs1];
             fetch_out.alu_in2 = fetch_out.imm;
             break;
@@ -124,14 +117,78 @@ struct State decode(struct State fetch_out) {
 struct State execute(struct State decode_out) {
 
     /**
-     * TODO: Your code for the decode stage here.
+     * TODO: Your code for the decode stage here.   
     */
 
-   // execute the instruction
+   switch (decode_out.opcode)
+   {
+   case RTYPE:
+       // R-Type
+        if (decode_out.funct7 == ADD_F7) {
+            decode_out.alu_out = decode_out.alu_in1 + decode_out.alu_in2;
+        } else if (decode_out.funct7 == SUB_F7) {
+            decode_out.alu_out = decode_out.alu_in1 - decode_out.alu_in2;
+        } else if (decode_out.funct3 == SLT) {
+            decode_out.alu_out = (decode_out.alu_in1 < decode_out.alu_in2) ? 1 : 0;
+        } else if (decode_out.funct3 == SLL) {
+            decode_out.alu_out = decode_out.alu_in1 << decode_out.alu_in2;
+        } else if (decode_out.funct3 == SRL) {
+            decode_out.alu_out = decode_out.alu_in1 >> decode_out.alu_in2;
+        } else if (decode_out.funct3 == AND) {
+            decode_out.alu_out = decode_out.alu_in1 & decode_out.alu_in2;
+        } else if (decode_out.funct3 == OR) {
+            decode_out.alu_out = decode_out.alu_in1 | decode_out.alu_in2;
+        } else if (decode_out.funct3 == XOR) {
+            decode_out.alu_out = decode_out.alu_in1 ^ decode_out.alu_in2;
+        } 
+        break;
 
+    case ITYPE_LOAD:
+  if (decode_out.funct3 == LW_SW){
+            decode_out.alu_out = decode_out.alu_in1 + decode_out.imm;
+            decode_out.rd = memory[decode_out.alu_out];
+            decode_out.mem_addr = decode_out.alu_out;
+        } else 
 
+    case ITYPE_ARITH:
+        // I-Type Instructions:  LW, ADDI, ANDI, ORI, XORI, SLTI, SLLI, SRLI
+      if (decode_out.funct3 == ADD_SUB){ // check with TA here
+            decode_out.alu_out = decode_out.alu_in1 + decode_out.imm;
+        } else if (decode_out.funct3 == AND){ // ANDI
+            decode_out.alu_out = decode_out.alu_in1 & decode_out.imm;
+        } else if (decode_out.funct3 == OR){ // ORI
+                decode_out.alu_out = decode_out.alu_in1 | decode_out.imm;
+        } else if (decode_out.funct3 == XOR){ // XOR
+                decode_out.alu_out = decode_out.alu_in1 ^ decode_out.alu_in2;
+        } else if (decode_out.funct3 == SLT) { // SLTI
+                decode_out.alu_out = (decode_out.alu_in1 < decode_out.imm) ? 1 : 0;
+        } else if (decode_out.funct3 == SLL) { // SLLI
+            decode_out.alu_out = decode_out.alu_in1 << decode_out.imm;
+        } else if (decode_out.funct3 == SRL) { // SRLI
+            decode_out.alu_out = decode_out.alu_in1 >> decode_out.imm;
+        } 
+        break;
 
+    case STYPE:
+        if (decode_out.funct3 == LW_SW){
+                decode_out.alu_out = decode_out.alu_in1 + decode_out.imm;
+                memory[decode_out.alu_out] = decode_out.alu_in2;
+            } 
+
+        break;
+
+    case LUI:
+        decode_out.rd = decode_out.imm;
+    // The upper 20 bits of the ALU output is set to the immediate value. The lower 12 bits
+// of the ALU are set to 0
+        // decode_out.alu_out = decode_out.imm << 12;
+        break;
    
+   default:
+    break;
+
+   }
+   // execute the instruction
 
     return decode_out;
 }
@@ -142,8 +199,23 @@ struct State execute(struct State decode_out) {
 struct State memory_stage(struct State ex_out) {
     
     /**
-     * TODO: Your code for the decode stage here.
+     * TODO: Your code for the memory stage here.
     */
+
+   // Memory stage
+    if (ex_out.opcode == ITYPE_LOAD && ex_out.funct3 == LW_SW) { // Load Word
+        ex_out.mem_buffer = memory[ex_out.mem_addr];
+    } else if (ex_out.opcode == STYPE && ex_out.funct3 == LW_SW) { // Store Word
+        // memory[ex_out.alu_out] = ex_out.rs2;
+        memory[ex_out.mem_addr] = ex_out.mem_buffer;
+        
+
+    } else {
+
+    }
+
+
+
 
 
 
@@ -156,8 +228,19 @@ struct State memory_stage(struct State ex_out) {
 unsigned int writeback(struct State mem_out) {
 
     /**
-     * TODO: Your code for the decode stage here.
+     * TODO: Your code for the write back stage here.
     */
+
+    // Writeback stage
+    if (mem_out.opcode == RTYPE || mem_out.opcode == ITYPE_ARITH) {
+        registers[mem_out.rd] = mem_out.alu_out;
+    } else if (mem_out.opcode == ITYPE_LOAD && mem_out.funct3 == LW_SW) {
+        registers[mem_out.rd] = mem_out.mem_buffer;
+    } else if (mem_out.opcode == LUI) {
+        // registers[mem_out.rd] = mem_out.alu_out;
+        registers[mem_out.rd] = mem_out.imm << 12; 
+    } else {
+    }
 
     return mem_out.inst;
 }
