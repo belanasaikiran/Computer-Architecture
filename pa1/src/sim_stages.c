@@ -33,7 +33,7 @@ struct State fetch(struct State fetch_out) {
 
 
   if (pipe_stall == 1) {
-    printf("Pipe stall detected\n");
+    // printf("Pipe stall detected\n");
     return fetch_out;
   }
 
@@ -54,6 +54,8 @@ struct State fetch(struct State fetch_out) {
  */
 struct State decode(struct State fetch_out) {
 
+  pipe_stall = 0; // reset the pipe_stall flag
+
   /**
    * TODO: Your code for the decode stage here.
    */
@@ -63,21 +65,20 @@ struct State decode(struct State fetch_out) {
   int re_reg1 = 0;
   int re_reg2 = 0;
 
+  // Interlock logic
   if (fetch_out.opcode == RTYPE || fetch_out.opcode == STYPE) {
     re_reg1 = 1;
     re_reg2 = 1;
   } else if (fetch_out.opcode == ITYPE_LOAD || fetch_out.opcode == ITYPE_ARITH) {
     re_reg1 = 1;
-    re_reg2 = 0;
-  } else {
-    re_reg1 = 0;
-    re_reg2 = 0;
-  }
+    // re_reg2 = 0;
+  } 
 
 
   // Decode stage
 //   printf("******** Decoding:  *********\n");
 
+  // Interlockl check
   // Check for hazards on rs1
   if (((fetch_out.rs1 != 0 ) && re_reg1) && ((we_exe && (fetch_out.rs1 == ws_exe)) || // Hazard with execute stage
       (we_mem && (fetch_out.rs1 == ws_mem)) || // Hazard with memory stage
@@ -118,7 +119,13 @@ struct State decode(struct State fetch_out) {
     }
 
     break;
+  
+  case LUI:
+    // fill this - might need to fix this
+    fetch_out.alu_in2 = fetch_out.inst & bit_31_downto_12; // last 12 bits set to 0
+    break;
 
+  fetch_out.alu_in1 = 0;
   default:
     break;
   }
@@ -135,13 +142,22 @@ struct State execute(struct State decode_out) {
    * TODO: Your code for the decode stage here.
    */
 
+  we_exe = 0;
+  ws_exe = decode_out.rd;
+
+  // Do a check if nop is passed and return the same
+  if (decode_out.inst == nop.inst) {
+    return decode_out;
+  }
+
+  // use Switch case for setting ws_exe and we_exe
 
   switch (decode_out.opcode) {
   case RTYPE:
     // R-Type
-    if (decode_out.funct7 == ADD_F7) {
+    if (decode_out.funct3 == ADD_SUB) {
       decode_out.alu_out = decode_out.alu_in1 + decode_out.alu_in2;
-    } else if (decode_out.funct7 == SUB_F7) {
+    } else if (decode_out.funct3 == ADD_SUB && decode_out.funct7 == SUB_F7) {
       decode_out.alu_out = decode_out.alu_in1 - decode_out.alu_in2;
     } else if (decode_out.funct3 == SLT) {
       decode_out.alu_out = (decode_out.alu_in1 < decode_out.alu_in2) ? 1 : 0;
@@ -157,7 +173,7 @@ struct State execute(struct State decode_out) {
       decode_out.alu_out = decode_out.alu_in1 ^ decode_out.alu_in2;
     } else {}
     we_exe = 1;
-    ws_exe = decode_out.rd;
+    // ws_exe = decode_out.rd;
     break;
 
   case ITYPE_LOAD:
@@ -166,7 +182,7 @@ struct State execute(struct State decode_out) {
       decode_out.mem_addr = decode_out.alu_out;
     }
     we_exe = 1;
-    ws_exe = decode_out.rd;
+    // ws_exe = decode_out.rd;
     break;
 
   case ITYPE_ARITH:
@@ -213,8 +229,6 @@ struct State execute(struct State decode_out) {
     break;
 
   default:
-    we_exe = 0;
-    ws_exe = 0;
     break;
   }
 
@@ -232,22 +246,16 @@ struct State memory_stage(struct State ex_out) {
   /**
    * TODO: Your code for the memory stage here.
    */
-
+  we_mem = we_exe;
+  ws_mem = ws_exe;
  
 
   // Memory stage
   if (ex_out.opcode == ITYPE_LOAD) { // Load Word
     ex_out.mem_buffer = memory[ex_out.mem_addr];
-    we_mem = 1;
-    ws_mem = ex_out.rd;
   } else if (ex_out.opcode == STYPE) { // Store Word
     memory[ex_out.mem_addr] = ex_out.mem_buffer;
-    ws_mem = 0;
-    we_mem = 0;
-  } else{
-     ws_mem = 0;
-     we_mem = 0;
-  }
+  } 
 
   return ex_out;
 }
@@ -260,24 +268,15 @@ unsigned int writeback(struct State mem_out) {
   /**
    * TODO: Your code for the write back stage here.
    */
+  we_wb = we_mem;
+  ws_wb = ws_mem;
 
   // Writeback stage
   if (mem_out.opcode == RTYPE || mem_out.opcode == ITYPE_ARITH || mem_out.opcode == LUI) {
     registers[mem_out.rd] = mem_out.alu_out;
-    we_wb = 1;
-    ws_wb = mem_out.rd;
   } else if (mem_out.opcode == ITYPE_LOAD) {
     registers[mem_out.rd] = mem_out.mem_buffer;
-    we_wb = 1;
-    ws_wb = mem_out.rd;
-  } else {
-    we_wb = 0;
-    ws_wb = 0;
-  }
-
-  if (pipe_stall == 1) {
-    pipe_stall = 0;
-  }
+  } 
 
   return mem_out.inst;
 }
