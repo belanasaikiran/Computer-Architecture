@@ -71,12 +71,11 @@ struct State decode(struct State fetch_out) {
    * TODO: Your code for the decode stage here.
    */
 
-    pipe_stall = 0; // reset the pipe_stall flag
       //branch misprediction - insert a bubble
     if (br_mispredicted == 1) {
-    // br_mispredicted = 0;
         return nop;
     }
+    pipe_stall = 0; // reset the pipe_stall flag
     // j_taken = 0;
     // br_mispredicted = 0;
        // initiate the read enable registers
@@ -89,7 +88,7 @@ struct State decode(struct State fetch_out) {
     if (fetch_out.opcode == RTYPE || fetch_out.opcode == STYPE || fetch_out.opcode == BTYPE) {
         re_reg1 = 1;
         re_reg2 = 1;
-    } else if (fetch_out.opcode == ITYPE_LOAD || fetch_out.opcode == ITYPE_ARITH) {
+    } else if (fetch_out.opcode == ITYPE_LOAD || fetch_out.opcode == ITYPE_ARITH || fetch_out.opcode == JALR) {
         re_reg1 = 1;
     }
 
@@ -139,7 +138,7 @@ struct State decode(struct State fetch_out) {
 
     if (lw_in_exe == 1) {
     pipe_stall = 1;
-    lw_in_exe = 0;
+    // lw_in_exe = 0;
     return nop;
     }
 
@@ -168,19 +167,19 @@ struct State decode(struct State fetch_out) {
 
         case LUI:
             // fill this - might need to fix this
-            fetch_out.imm = fetch_out.inst & bit_31_downto_12; // last 12 bits set to 0
+            // fetch_out.imm = fetch_out.inst & bit_31_downto_12; // last 12 bits set to 0
             break;
 
 
         case JAL:
+            j_taken = 1;
             fetch_out.link_addr = fetch_out.inst_addr + 4;
             pc_n = fetch_out.inst_addr + fetch_out.imm;
-            j_taken = 1;
         break;
         case JALR:
+            j_taken = 1;
             fetch_out.link_addr = fetch_out.inst_addr + 4;
             pc_n = registers[fetch_out.rs1] + fetch_out.imm;
-            j_taken = 1;
             break;
 
         case BTYPE:
@@ -216,6 +215,7 @@ struct State execute(struct State decode_out) {
 
   // Do a check if nop is passed and return the same
   if (decode_out.inst == nop.inst) {
+    we_exe = 1;
     return decode_out;
   }
 
@@ -288,21 +288,17 @@ struct State execute(struct State decode_out) {
     break;
 
   case STYPE:
-    decode_out.alu_out = decode_out.alu_in1 + decode_out.alu_in2;
-    decode_out.mem_addr = decode_out.alu_out;
-
-
+    decode_out.mem_addr = decode_out.alu_in1 + decode_out.alu_in2;
     break;
 
   case LUI:
     // decode_out.alu_out = decode_out.imm;
     // The upper 20 bits of the ALU output is set to the immediate value. The lower 12 bits
     // of the ALU are set to 0
-    decode_out.imm = decode_out.inst & bit_31_downto_12;
-    decode_out.alu_out = decode_out.imm;
-
+    decode_out.alu_out = decode_out.inst & bit_31_downto_12;
     we_exe = 1;
     ws_exe = decode_out.rd;
+    dout_exe = decode_out.alu_out;
 
     break;
 
