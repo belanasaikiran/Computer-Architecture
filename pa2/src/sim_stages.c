@@ -37,7 +37,6 @@ struct State fetch(struct State fetch_out) {
    */
 
   if (pipe_stall == 1) {
-    // printf("Pipe stall detected\n");
     return fetch_out;
   }
 // Handling control hazards: return nop if jump or branch is taken
@@ -73,71 +72,79 @@ struct State decode(struct State fetch_out) {
    */
 
     pipe_stall = 0; // reset the pipe_stall flag
-
-    decode_fields( & fetch_out);
-
-    // initiate the read enable registers
-    int re_reg1 = 0;
-    int re_reg2 = 0;
-
-    // Interlock logic
-    if (fetch_out.opcode == RTYPE || fetch_out.opcode == STYPE) {
-        re_reg1 = 1;
-        re_reg2 = 1;
-    } else if (fetch_out.opcode == ITYPE_LOAD || fetch_out.opcode == ITYPE_ARITH) {
-        re_reg1 = 1;
-        // re_reg2 = 0;
-    }
-
-    // Check for forwarding enabled
-    if (forwarding_enabled) {
-        if(fetch_out.rs1 !=0){
-            if(we_exe && fetch_out.rs1 == ws_exe){
-                fetch_out.alu_in1 = dout_exe;
-            } else if(we_mem && fetch_out.rs1 == ws_mem){
-                fetch_out.alu_in1 = dout_mem;
-            } else if(we_wb && fetch_out.rs1 == ws_wb){
-                fetch_out.alu_in1 = dout_wb;
-            }
-        }
-      
-        if(fetch_out.rs2 !=0){
-            if(we_exe && fetch_out.rs2 == ws_exe){
-                fetch_out.alu_in2 = dout_exe;
-            } else if(we_mem && fetch_out.rs2 == ws_mem){
-                fetch_out.alu_in2 = dout_mem;
-            } else if(we_wb && fetch_out.rs2 == ws_wb){
-                fetch_out.alu_in2 = dout_wb;
-            }
-        }
-    }
-
-
-  // Interlock check
-  // Check for hazards on rs1 and rs2
-if ((((fetch_out.rs1 != 0) && re_reg1) && ((we_exe && (fetch_out.rs1 == ws_exe)) || // Hazard with execute stage
-        (we_mem && (fetch_out.rs1 == ws_mem)) || // Hazard with memory stage
-        (we_wb && (fetch_out.rs1 == ws_wb)))) || // Hazard with writeback stage
-        (((fetch_out.rs2 != 0) && re_reg2) && ((we_exe && (fetch_out.rs2 == ws_exe)) || // Hazard with execute stage
-        (we_mem && (fetch_out.rs2 == ws_mem)) || // Hazard with memory stage
-        (we_wb && (fetch_out.rs2 == ws_wb))))) { // Hazard with writeback stage
-    pipe_stall = 1;
-    return nop; // Stall pipeline with a NOP
-}
-
-
-  //branch misprediction - insert a bubble
+      //branch misprediction - insert a bubble
     if (br_mispredicted == 1) {
     // br_mispredicted = 0;
         return nop;
     }
+    // j_taken = 0;
+    // br_mispredicted = 0;
+       // initiate the read enable registers
+    int re_reg1 = 0;
+    int re_reg2 = 0;
 
+    decode_fields( & fetch_out);
+
+    // Interlock logic
+    if (fetch_out.opcode == RTYPE || fetch_out.opcode == STYPE || fetch_out.opcode == BTYPE) {
+        re_reg1 = 1;
+        re_reg2 = 1;
+    } else if (fetch_out.opcode == ITYPE_LOAD || fetch_out.opcode == ITYPE_ARITH) {
+        re_reg1 = 1;
+    }
+
+    // Check for forwarding enabled
+    if (forwarding_enabled) {
+        if((fetch_out.rs1 != 0) && re_reg1 == 1){
+            if(we_exe && fetch_out.rs1 == ws_exe){
+                registers[fetch_out.rs1] = dout_exe;
+            } else if(we_mem && fetch_out.rs1 == ws_mem){
+                registers[fetch_out.rs1] = dout_mem;
+            } else if(we_wb && fetch_out.rs1 == ws_wb){
+                registers[fetch_out.rs1] = dout_wb;
+            }
+
+            fetch_out.alu_in1 = registers[fetch_out.rs1];
+        }
+      
+        if((fetch_out.rs2 != 0) && re_reg2 == 1){
+            if(we_exe && fetch_out.rs2 == ws_exe){
+                registers[fetch_out.rs2] = dout_exe;
+            } else if(we_mem && fetch_out.rs2 == ws_mem){
+                registers[fetch_out.rs2]  = dout_mem;
+            } else if(we_wb && fetch_out.rs2 == ws_wb){
+                registers[fetch_out.rs2]  = dout_wb;
+            }
+            fetch_out.alu_in2 = registers[fetch_out.rs2];
+        }
+    }else{
+    // Interlock check
+    // Check for hazards on rs1 and rs2
+        if ((((fetch_out.rs1 != 0) && re_reg1) && ((we_exe && (fetch_out.rs1 == ws_exe)) || // Hazard with execute stage
+                (we_mem && (fetch_out.rs1 == ws_mem)) || // Hazard with memory stage
+                (we_wb && (fetch_out.rs1 == ws_wb)))) || // Hazard with writeback stage
+                (((fetch_out.rs2 != 0) && re_reg2) && ((we_exe && (fetch_out.rs2 == ws_exe)) || // Hazard with execute stage
+                (we_mem && (fetch_out.rs2 == ws_mem)) || // Hazard with memory stage
+                (we_wb && (fetch_out.rs2 == ws_wb))))) { // Hazard with writeback stage
+            pipe_stall = 1;
+            return nop; // Stall pipeline with a NOP
+        }
+    }
+
+
+    // resolve JAL and JALR instructions
+    // if(j_taken == 1){
+    //     j_taken = 0;
+    // }
 
     if (lw_in_exe == 1) {
     pipe_stall = 1;
+    lw_in_exe = 0;
     return nop;
     }
 
+    // Sign extension
+    // int32_t imm_signed = (int32_t)(fetch_out.imm << 20) >> 20; // 12-bit sign extension
 
     // determine the instruction type based on the opcode
     switch (fetch_out.opcode) {
@@ -161,19 +168,19 @@ if ((((fetch_out.rs1 != 0) && re_reg1) && ((we_exe && (fetch_out.rs1 == ws_exe))
 
         case LUI:
             // fill this - might need to fix this
-            fetch_out.alu_in2 = fetch_out.inst & bit_31_downto_12; // last 12 bits set to 0
+            fetch_out.imm = fetch_out.inst & bit_31_downto_12; // last 12 bits set to 0
             break;
 
-            fetch_out.alu_in1 = 0;
 
         case JAL:
-              fetch_out.link_addr = fetch_out.inst_addr + 4;
-                pc_n = fetch_out.inst_addr + fetch_out.imm;
+            fetch_out.link_addr = fetch_out.inst_addr + 4;
+            pc_n = fetch_out.inst_addr + fetch_out.imm;
+            j_taken = 1;
         break;
         case JALR:
-          fetch_out.link_addr = fetch_out.inst_addr + 4;
-            pc_n = (fetch_out.alu_in1 + fetch_out.imm) & ~1;
-        // dout_exe = decode_out.alu_out;
+            fetch_out.link_addr = fetch_out.inst_addr + 4;
+            pc_n = registers[fetch_out.rs1] + fetch_out.imm;
+            j_taken = 1;
             break;
 
         case BTYPE:
@@ -201,24 +208,21 @@ struct State execute(struct State decode_out) {
    */
 
   we_exe = 0;
-  ws_exe = decode_out.rd;
+  ws_exe = 0;
   lw_in_exe = 0;
+  dout_exe = 0;
+  br_mispredicted = 0;
+
 
   // Do a check if nop is passed and return the same
   if (decode_out.inst == nop.inst) {
     return decode_out;
   }
 
-
-  // reset j_taken flag
-    // if(j_taken){
-    //     j_taken = 0;
-    // }
-
-    // reset br_mispredicted flag
-    if(br_mispredicted){
-        br_mispredicted = 0;
-    }
+// // reset br_mispredicted flag
+// if(br_mispredicted){
+//     br_mispredicted = 0;
+// }
 
   // use Switch case for setting ws_exe and we_exe
 
@@ -226,9 +230,11 @@ struct State execute(struct State decode_out) {
   case RTYPE:
     // R-Type
     if (decode_out.funct3 == ADD_SUB) {
-      decode_out.alu_out = decode_out.alu_in1 + decode_out.alu_in2;
-    } else if (decode_out.funct3 == ADD_SUB && decode_out.funct7 == SUB_F7) {
-      decode_out.alu_out = decode_out.alu_in1 - decode_out.alu_in2;
+      if(decode_out.funct7 == SUB_F7){
+        decode_out.alu_out = decode_out.alu_in1 - decode_out.alu_in2;
+      } else {
+        decode_out.alu_out = decode_out.alu_in1 + decode_out.alu_in2;
+      }
     } else if (decode_out.funct3 == SLT) {
       decode_out.alu_out = (decode_out.alu_in1 < decode_out.alu_in2) ? 1 : 0;
     } else if (decode_out.funct3 == SLL) {
@@ -243,16 +249,17 @@ struct State execute(struct State decode_out) {
       decode_out.alu_out = decode_out.alu_in1 ^ decode_out.alu_in2;
     } else {}
     we_exe = 1;
+  ws_exe = decode_out.rd;
     dout_exe = decode_out.alu_out;
     break;
 
   case ITYPE_LOAD:
     if (decode_out.funct3 == LW_SW) {
-      decode_out.alu_out = decode_out.alu_in1 + decode_out.alu_in2;
-      decode_out.mem_addr = decode_out.alu_out;
+      decode_out.mem_addr = decode_out.alu_in1 + decode_out.alu_in2;
     }
     we_exe = 1;
     dout_exe = decode_out.alu_out;
+  ws_exe = decode_out.rd;
     lw_in_exe = 1;
     break;
 
@@ -275,6 +282,7 @@ struct State execute(struct State decode_out) {
     } else {}
 
     we_exe = 1;
+    ws_exe = decode_out.rd;
     dout_exe = decode_out.alu_out;
     // ws_exe = decode_out.rd;
     break;
@@ -283,8 +291,6 @@ struct State execute(struct State decode_out) {
     decode_out.alu_out = decode_out.alu_in1 + decode_out.alu_in2;
     decode_out.mem_addr = decode_out.alu_out;
 
-    we_exe = 0;
-    ws_exe = 0;
 
     break;
 
@@ -301,15 +307,10 @@ struct State execute(struct State decode_out) {
     break;
 
   case BTYPE:
-    /*The two ALU operands are compared to determine if the branch will be taken or not.
-    If the branch is taken (i.e., the two ALU operands are equal), then pc_n is set to br_-
-    addr, overwritting the advance_pc() call performed in the fetch stage. Otherwise,
-    nothing is done here.*/
-
-    if ((decode_out.funct3 == BEQ && decode_out.alu_in1 == decode_out.alu_in2) ||
+     if ((decode_out.funct3 == BEQ && decode_out.alu_in1 == decode_out.alu_in2) ||
         (decode_out.funct3 == BNE && decode_out.alu_in1 != decode_out.alu_in2) ||
-        (decode_out.funct3 == BLT && decode_out.alu_in1 < decode_out.alu_in2) ||
-        (decode_out.funct3 == BGE && decode_out.alu_in1 >= decode_out.alu_in2)) {
+        (decode_out.funct3 == BLT && (int32_t)decode_out.alu_in1 < (int32_t)decode_out.alu_in2) ||
+        (decode_out.funct3 == BGE && (int32_t)decode_out.alu_in1 >= (int32_t)decode_out.alu_in2)) {
         br_mispredicted = 1;
         pc_n = decode_out.br_addr;
     } else{
@@ -321,12 +322,10 @@ struct State execute(struct State decode_out) {
 
     break;
     case JAL:
-        j_taken = 1;
-        dout_exe = decode_out.link_addr;
-        break;
     case JALR:
-        j_taken = 1;
-        dout_exe = decode_out.link_addr;
+        // dout_exe = decode_out.link_addr;
+        // pc_n = decode_out.br_addr;
+        // we_exe = 1;
         break;
 
 
@@ -348,6 +347,7 @@ struct State memory_stage(struct State ex_out) {
    */
   we_mem = we_exe;
   ws_mem = ws_exe;
+  dout_mem = 0;
 
   // Memory stage
   if (ex_out.opcode == ITYPE_LOAD) { // Load Word
@@ -355,6 +355,10 @@ struct State memory_stage(struct State ex_out) {
     dout_mem = ex_out.mem_buffer;
   } else if (ex_out.opcode == STYPE) { // Store Word
     memory[ex_out.mem_addr] = ex_out.mem_buffer;
+  }
+
+  if(ex_out.opcode == RTYPE || ex_out.opcode == ITYPE_ARITH || ex_out.opcode == LUI){
+    dout_mem = ex_out.alu_out;
   }
 
   return ex_out;
@@ -370,6 +374,7 @@ unsigned int writeback(struct State mem_out) {
    */
   we_wb = we_mem;
   ws_wb = ws_mem;
+  dout_wb = 0;
 
   // Writeback stage
   if (mem_out.opcode == RTYPE || mem_out.opcode == ITYPE_ARITH || mem_out.opcode == LUI) {
@@ -381,7 +386,7 @@ unsigned int writeback(struct State mem_out) {
   } else if (mem_out.opcode == JAL || mem_out.opcode == JALR) {
     if(mem_out.rd != 0){
         registers[mem_out.rd] = mem_out.link_addr;
-        dout_wb = mem_out.link_addr;
+        // dout_wb = mem_out.link_addr;
     }
     }
 
