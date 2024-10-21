@@ -36,19 +36,12 @@ struct State fetch(struct State fetch_out) {
    * TODO: Your logic for fetch stage here.
    */
 
-  if (pipe_stall == 1) {
-    return fetch_out;
-  }
-// Handling control hazards: return nop if jump or branch is taken
-  if (j_taken == 1) {
-    j_taken = 0; // reset the j_taken flag
-    return nop; // inserting a bubble
-  }
+  if (pipe_stall == 1) return fetch_out;
 
-  if(br_mispredicted == 1){
-    br_mispredicted = 0; // reset the br_mispredicted flag
-    return nop; // inserting a bubble
-  }
+
+// Handling control hazards: return nop if jump or branch is taken
+  if (j_taken == 1) return nop; // inserting a bubble
+  if (br_mispredicted == 1) return nop; // inserting a bubble
 
   // Use the current PC to store i) The instruction ii) The instruction address
   struct State fetch_out_temp = {0}; // Initialize to zero
@@ -71,18 +64,19 @@ struct State decode(struct State fetch_out) {
    * TODO: Your code for the decode stage here.
    */
 
-      //branch misprediction - insert a bubble
-    if (br_mispredicted == 1) {
-        return nop;
-    }
+    //branch misprediction - insert a bubble
+    if (br_mispredicted == 1) return nop;
+
+    // reset
     pipe_stall = 0; // reset the pipe_stall flag
-    // j_taken = 0;
-    // br_mispredicted = 0;
-       // initiate the read enable registers
+    j_taken = 0;
+    br_mispredicted = 0;
+    
+    // initiate the read enable registers
     int re_reg1 = 0;
     int re_reg2 = 0;
 
-    decode_fields( & fetch_out);
+    decode_fields( &fetch_out);
 
     // Interlock logic
     if (fetch_out.opcode == RTYPE || fetch_out.opcode == STYPE || fetch_out.opcode == BTYPE) {
@@ -97,6 +91,11 @@ struct State decode(struct State fetch_out) {
         if((fetch_out.rs1 != 0) && re_reg1 == 1){
             if(we_exe && fetch_out.rs1 == ws_exe){
                 registers[fetch_out.rs1] = dout_exe;
+                if (lw_in_exe == 1) {
+                pipe_stall = 1;
+                // lw_in_exe = 0;
+                return nop;
+                }
             } else if(we_mem && fetch_out.rs1 == ws_mem){
                 registers[fetch_out.rs1] = dout_mem;
             } else if(we_wb && fetch_out.rs1 == ws_wb){
@@ -109,6 +108,10 @@ struct State decode(struct State fetch_out) {
         if((fetch_out.rs2 != 0) && re_reg2 == 1){
             if(we_exe && fetch_out.rs2 == ws_exe){
                 registers[fetch_out.rs2] = dout_exe;
+                if (lw_in_exe == 1) {
+                  pipe_stall = 1;
+                  return nop;
+                  }
             } else if(we_mem && fetch_out.rs2 == ws_mem){
                 registers[fetch_out.rs2]  = dout_mem;
             } else if(we_wb && fetch_out.rs2 == ws_wb){
@@ -136,11 +139,7 @@ struct State decode(struct State fetch_out) {
     //     j_taken = 0;
     // }
 
-    if (lw_in_exe == 1) {
-    pipe_stall = 1;
-    // lw_in_exe = 0;
-    return nop;
-    }
+ 
 
     // Sign extension
     // int32_t imm_signed = (int32_t)(fetch_out.imm << 20) >> 20; // 12-bit sign extension
@@ -178,6 +177,9 @@ struct State decode(struct State fetch_out) {
         break;
         case JALR:
             j_taken = 1;
+            // alu to rs1 and alu to rs2
+            fetch_out.alu_in1 = registers[fetch_out.rs1];
+            fetch_out.alu_in2 = fetch_out.imm;
             fetch_out.link_addr = fetch_out.inst_addr + 4;
             pc_n = registers[fetch_out.rs1] + fetch_out.imm;
             break;
@@ -219,13 +221,7 @@ struct State execute(struct State decode_out) {
     return decode_out;
   }
 
-// // reset br_mispredicted flag
-// if(br_mispredicted){
-//     br_mispredicted = 0;
-// }
-
   // use Switch case for setting ws_exe and we_exe
-
   switch (decode_out.opcode) {
   case RTYPE:
     // R-Type
@@ -249,7 +245,7 @@ struct State execute(struct State decode_out) {
       decode_out.alu_out = decode_out.alu_in1 ^ decode_out.alu_in2;
     } else {}
     we_exe = 1;
-  ws_exe = decode_out.rd;
+    ws_exe = decode_out.rd;
     dout_exe = decode_out.alu_out;
     break;
 
@@ -259,7 +255,7 @@ struct State execute(struct State decode_out) {
     }
     we_exe = 1;
     dout_exe = decode_out.alu_out;
-  ws_exe = decode_out.rd;
+    ws_exe = decode_out.rd;
     lw_in_exe = 1;
     break;
 
@@ -284,7 +280,6 @@ struct State execute(struct State decode_out) {
     we_exe = 1;
     ws_exe = decode_out.rd;
     dout_exe = decode_out.alu_out;
-    // ws_exe = decode_out.rd;
     break;
 
   case STYPE:
@@ -292,7 +287,6 @@ struct State execute(struct State decode_out) {
     break;
 
   case LUI:
-    // decode_out.alu_out = decode_out.imm;
     // The upper 20 bits of the ALU output is set to the immediate value. The lower 12 bits
     // of the ALU are set to 0
     decode_out.alu_out = decode_out.inst & bit_31_downto_12;
@@ -309,19 +303,17 @@ struct State execute(struct State decode_out) {
         (decode_out.funct3 == BGE && (int32_t)decode_out.alu_in1 >= (int32_t)decode_out.alu_in2)) {
         br_mispredicted = 1;
         pc_n = decode_out.br_addr;
-    } else{
-        br_mispredicted = 0;
-    }
-
-    //   we_exe = 0;
-
-
+      } else{
+          br_mispredicted = 0;
+      }
     break;
+
     case JAL:
     case JALR:
-        // dout_exe = decode_out.link_addr;
+        dout_exe = decode_out.link_addr; // ask the TA
         // pc_n = decode_out.br_addr;
-        // we_exe = 1;
+        we_exe = 1;
+        ws_exe = decode_out.rd;
         break;
 
 
@@ -343,7 +335,7 @@ struct State memory_stage(struct State ex_out) {
    */
   we_mem = we_exe;
   ws_mem = ws_exe;
-  dout_mem = 0;
+  dout_mem = dout_mem;
 
   // Memory stage
   if (ex_out.opcode == ITYPE_LOAD) { // Load Word
@@ -380,10 +372,9 @@ unsigned int writeback(struct State mem_out) {
     registers[mem_out.rd] = mem_out.mem_buffer;
     dout_wb = mem_out.mem_buffer;
   } else if (mem_out.opcode == JAL || mem_out.opcode == JALR) {
-    if(mem_out.rd != 0){
-        registers[mem_out.rd] = mem_out.link_addr;
-        // dout_wb = mem_out.link_addr;
-    }
+      if(mem_out.rd != 0){
+          registers[mem_out.rd] = mem_out.link_addr;
+      }
     }
 
   return mem_out.inst;
