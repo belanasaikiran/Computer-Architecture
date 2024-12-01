@@ -35,7 +35,11 @@ int pipe_trace_mode = 3; /* See PA1 handout, section 5 for usage */
 struct State fetch() {
     
     // Stall or Flush handling
-    if (dmem_busy == 1 || pipe_stall == 1) return fetch_out; // stall fetch when memory (LD/SW) is busy,Return current state if stalled
+    if(ooo_enabled){
+        if(pipe_stall) return fetch_out;
+    } else{
+        if (dmem_busy == 1 || pipe_stall == 1) return fetch_out; // stall fetch when memory (LD/SW) is busy,Return current state if stalled
+    }
 
     // Handling control hazards: return nop if jump or branch is taken
     if (j_taken == 1 || br_mispredicted == 1) return nop; // inserting a bubble
@@ -60,6 +64,16 @@ struct State decode() {
 
     // Copy fetch_out to decodse_out_n
     decode_out_n = fetch_out;
+
+    // 1. Checking for RAW hazards in Memory execution units
+    if(decode_out_n.opcode == ITYPE_LOAD){
+        // stalling if any store is active in the memory(ld_st) execution units
+        if(dmem_busy || dmem_busy2){
+            pipe_stall = 1;
+            return nop;
+        }
+    }
+
    
    // Control hazard handling
     if (br_mispredicted == 1 || dmem_busy == 1 || dmem_busy2 == 1) return nop; //branch misprediction - insert a bubble
@@ -70,6 +84,8 @@ struct State decode() {
     br_mispredicted = 0;
     int re_reg1 = 0, re_reg2 = 0; // initiate the read enable registers
     int raw_hazard = 0; // initiate the raw hazard flag
+    int waw_hazard = 0; // initiate the write after write hazard flag
+    int war_hazard = 0; // initiate the write after read hazard flag
     decode_fields( &decode_out_n);
 
     // Interlock logic
@@ -81,8 +97,46 @@ struct State decode() {
     }
 
 
-    // out of order execution
+
+
+    // Checking for Terminate Instruction and handling
+    if(decode_out_n.opcode == ITYPE_ARITH && // opcode is ADDI
+        decode_out_n.rd == 0 && // destination register is  0
+        decode_out_n.rs1 == 0 && // source register is 0
+        decode_out_n.imm == 1) { // immediate value is 1
+
+        /* For terminate instruction (addi zero,zero,1) in the decode stage, a valid load or store in the
+            load/store units indicates another older instruction that must proceed to its final execute cycle
+            before the terminate instruction is allowed to enter the execution stage. */
+        if (dmem_busy || dmem_busy2) {
+            pipe_stall = 1;
+            return nop;
+        }
+    }
+
+
+
+    // Out of order execution check and handling
     if(ooo_enabled){
+
+            // check for RAW, WAW, WAR hazards
+            if(decode_out_n.opcode != STYPE && decode_out_n.opcode != ITYPE_LOAD){
+                if(decode_out_n.rd != 0){
+                    // Check for WAW hazards
+                    if(we_mem && (decode_out_n.rd == ws_mem)) waw_hazard = 1;
+                    if(we_mem2 && (decode_out_n.rd == ws_mem2)) waw_hazard = 1;
+                    if (we_exe && decode_out_n.rd == ws_exe) waw_hazard = 1;
+                    if (we_wb && decode_out_n.rd == ws_wb) waw_hazard = 1;
+                }
+            }
+
+            if (decode_out_n.opcode == STYPE) {
+                //Check WAR hazards
+                if (we_mem && decode_out_n.rd == ws_mem) war_hazard = 1;
+                if (we_mem2 && decode_out_n.rd == ws_mem2) war_hazard = 1;
+            }
+
+
         // assigning load/store to available unit
         if (decode_out_n.opcode == ITYPE_LOAD || decode_out_n.opcode == STYPE) {
             if (!dmem_busy) {
@@ -106,14 +160,9 @@ struct State decode() {
     }
 
 
-    // Terminate instruction handling
-    // if (decode_out_n.opcode == terminate && (dmem_busy || dmem_busy2)) {
-    //     pipe_stall = 1;
-    //     return nop;
-    // }
+ 
 
-
-    // Check for forwarding enabled
+    // 4. Check for forwarding enabled
     if (forwarding_enabled) {
         if((decode_out_n.rs1 != 0) && re_reg1 == 1){
 
@@ -151,13 +200,13 @@ struct State decode() {
         }
     }
 
-    if(raw_hazard == 1){
+    if(raw_hazard == 1 || waw_hazard == 1 || war_hazard == 1){
         pipe_stall = 1;
         return nop;
     }
 
 
-    // determine the instruction type based on the opcode
+    // 5. Determine the instruction type based on the opcode
     switch (decode_out_n.opcode) {
         case RTYPE: // R-Type Instructions - opcode = 0x33
             decode_out_n.alu_in1 = registers[decode_out_n.rs1];
@@ -221,9 +270,12 @@ struct State execute() {
 
     // Do a check if nop is passed and return the same
     // NOP or load/store handling
-    if (decode_out.inst == nop.inst || decode_out.opcode == ITYPE_LOAD || decode_out.opcode == STYPE) {
-        return nop;
+    if(ooo_enabled){
+        if (decode_out.opcode == ITYPE_LOAD || decode_out.opcode == STYPE) return nop;
+    } else{
+        if (decode_out.opcode == ITYPE_LOAD || decode_out.opcode == STYPE || dmem_busy == 1) return nop;
     }
+   
 
     ex_out_n = decode_out;
 
@@ -297,7 +349,7 @@ struct State execute() {
 struct State execute_ld_st() {
 
     we_mem = 0;
-    // ws_mem = 0;
+    ws_mem = 0;
     // dout_mem = 0;
     ex_ld_st_out_n = decode_out; // Copy decode_out to ex_ld_st_out_n
 
@@ -319,7 +371,7 @@ struct State execute_ld_st() {
             // Load or Store operation
             if (ex_ld_st_out_n.opcode == ITYPE_LOAD) {
                 ex_ld_st_out_n.mem_buffer = memory[ex_ld_st_out_n.mem_addr]; // Load value
-                we_mem = 1;                    // Enable write for memory stage
+                we_mem = 1;                 // Enable write for memory stage
                 if(ex_ld_st_out_n.rd != 0) ws_mem = ex_ld_st_out_n.rd;
             } else if (ex_ld_st_out_n.opcode == STYPE) {
                 memory[ex_ld_st_out_n.mem_addr] = ex_ld_st_out_n.mem_buffer; // Store value
@@ -340,6 +392,7 @@ struct State execute_ld_st() {
 struct State execute_2nd_ld_st() {
 
     we_mem2 = 0;
+    ws_mem2 = 0;
     ex_ld_st_2_out_n = decode_out;
 
     if (dmem_busy2 == 0 && (ex_ld_st_2_out_n.opcode == ITYPE_LOAD || ex_ld_st_2_out_n.opcode == STYPE)) {
@@ -381,20 +434,12 @@ void writeback() {
     we_ld_st_wb = 0;
     we_ld_st_2_wb = 0;
 
-    // case 0: if dmem_busy or dmem_busy2 is 1, return nop
-    if(dmem_busy || dmem_busy2) return;
-
-    // Case 1: All -> ex_out, ex_ld_st_out and ex_ld_st_2_out are NOP, return NOP
-    if (ex_out.inst == nop.inst && ex_ld_st_out.inst && ex_ld_st_2_out.inst == nop.inst) return;  // No valid instruction to commit
-
-
     // PA 4 logic
 
-    if(ooo_enabled){
-        // out of order
-
+    if(ooo_enabled){ // out of order
         // write back for non-memory instructions
         if(ex_out.inst != nop.inst){
+            wb_out_n = ex_out;
             if(ex_out.opcode == RTYPE || ex_out.opcode == ITYPE_ARITH || ex_out.opcode == LUI){
                 registers[ex_out.rd] = ex_out.alu_out;
                 we_wb = 1;
@@ -403,46 +448,62 @@ void writeback() {
             } else if(ex_out.opcode == JAL || ex_out.opcode == JALR){
                 if(ex_out.rd != 0){
                     registers[ex_out.rd] = ex_out.link_addr;
-                    we_wb = 1;
-                    ws_wb = ex_out.rd;
-                    dout_wb = ex_out.link_addr;
                 }
+                we_wb = 1;
+                ws_wb = ex_out.rd;
+                dout_wb = ex_out.link_addr;
             }
+        } else {
+            wb_out_n = nop;
         }
 
 
         // write back for memory instructions - first load/store unit
-        if(ex_ld_st_out.inst != nop.inst){
-            wb_out_n = ex_ld_st_out;
+        if(ex_ld_st_out.inst != nop.inst && dmem_busy == 0){
+            wb_ld_st_out_n = ex_ld_st_out;
             if(wb_out_n.opcode == ITYPE_LOAD){
                 registers[wb_out_n.rd] = ex_ld_st_out.mem_buffer;
                 we_ld_st_wb = 1;
                 ws_ld_st_wb = wb_out_n.rd;
                 dout_ld_st_wb = ex_ld_st_out.mem_buffer;
             }
+        } else {
+            wb_ld_st_out_n = nop;
         }
 
 
         // write back for memory instructions - second load/store unit
-        if(ex_ld_st_2_out.inst != nop.inst){
-            wb_out_n = ex_ld_st_2_out;
+        if(ex_ld_st_2_out.inst != nop.inst && dmem_busy2 == 0){
+            wb_ld_st_2_out_n = ex_ld_st_2_out;
             if(wb_out_n.opcode == ITYPE_LOAD){
                 registers[wb_out_n.rd] = ex_ld_st_2_out.mem_buffer;
                 we_ld_st_2_wb = 1;
                 ws_ld_st_2_wb = wb_out_n.rd;
                 dout_ld_st_2_wb = ex_ld_st_2_out.mem_buffer;
             }
+        } else {
+            wb_ld_st_2_out_n = nop;
         }
+
+        // if(we_ld_st_wb && we_ld_st_2_wb && ws_ld_st_wb == ws_ld_st_2_wb){
+        //     we_ld_st_2_wb = 0;
+        //     ws_ld_st_2_wb = 0;
+        //     dout_ld_st_2_wb = 0;
+        // }
 
 
         // return instruction or nop
-        if (ex_out.inst != nop.inst || ex_ld_st_out.inst != nop.inst || ex_ld_st_2_out.inst != nop.inst)  return;
+        // if (ex_out.inst != nop.inst || ex_ld_st_out.inst != nop.inst || ex_ld_st_2_out.inst != nop.inst)  return;
 
     } else {
         // in order writeback
 
+        // case 0: if dmem_busy or dmem_busy2 is 1, return nop
+        if(dmem_busy) wb_out_n = nop;
+
+
         // Case 2: ex_ld_st_out contains a valid load/store but dmem_busy == 1, stall the pipeline
-        if (dmem_busy == 1 && (ex_ld_st_out.opcode == ITYPE_LOAD || ex_ld_st_out.opcode == STYPE)) return;  // Stall writeback stage as memory operation is not finished yet
+        if (dmem_busy && (ex_ld_st_out.opcode == ITYPE_LOAD || ex_ld_st_out.opcode == STYPE)) wb_out_n = nop;  // Stall writeback stage as memory operation is not finished yet
 
         // priority order: execute -> load/store -> load/store 2
         if(ex_out.inst != nop.inst){
@@ -461,7 +522,7 @@ void writeback() {
             }
         }
 
-
+        //LOAD 
         if(ex_ld_st_out.inst != nop.inst){
             wb_out_n = ex_ld_st_out;
             if(wb_out_n.opcode == ITYPE_LOAD){
@@ -469,16 +530,6 @@ void writeback() {
                 we_ld_st_wb = 1; // Enable writeback for load/store unit 1
                 ws_ld_st_wb = wb_out_n.rd; // Set the writeback register
                 dout_ld_st_wb = ex_ld_st_out.mem_buffer; // forward the loaded value
-            }
-        }
-
-        if(ex_ld_st_2_out.inst != nop.inst){
-            wb_out_n = ex_ld_st_2_out;
-            if(wb_out_n.opcode == ITYPE_LOAD){
-                registers[wb_out_n.rd] = ex_ld_st_2_out.mem_buffer; // Writing the loaded value into the destination register
-                we_ld_st_2_wb = 1; // Enable writeback for load/store unit 2
-                ws_ld_st_2_wb = wb_out_n.rd; // Set the writeback register
-                dout_ld_st_2_wb = ex_ld_st_2_out.mem_buffer; // forward the loaded value
             }
         }
 
