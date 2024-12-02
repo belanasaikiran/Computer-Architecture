@@ -33,11 +33,11 @@ int pipe_trace_mode = 3; /* See PA1 handout, section 5 for usage */
  * Fetch stage implementation.
  */
 struct State fetch() {
-    
+
     // Stall or Flush handling
-    if(ooo_enabled){
+    if(ooo_enabled) {
         if(pipe_stall) return fetch_out;
-    } else{
+    } else {
         if (dmem_busy == 1 || pipe_stall == 1) return fetch_out; // stall fetch when memory (LD/SW) is busy,Return current state if stalled
     }
 
@@ -60,14 +60,13 @@ struct State fetch() {
  * Decode stage implementation
  */
 struct State decode() {
-    
 
     // Copy fetch_out to decodse_out_n
     decode_out_n = fetch_out;
 
    // Control hazard handling
     if (br_mispredicted == 1) return nop; //branch misprediction - insert a bubble
-    if (dmem_busy == 1 && ooo_enabled == 0) return nop; // stall decode when memory (LD/SW) is busy
+    // if (dmem_busy == 1 && ooo_enabled == 0) return nop; // stall decode when memory (LD/SW) is busy
 
     // reset
     pipe_stall = 0; // reset the pipe_stall flag
@@ -88,24 +87,25 @@ struct State decode() {
     }
 
 
-
-
-
-
-
-
-    // Out of order execution check and handling
+    // *******************************************************************
+    // ************ Out of order execution check and handling ************
+    // *******************************************************************
     if(ooo_enabled){
 
+        if(decode_out_n.rd == 0){
+            if (dmem_busy || dmem_busy2) {
+                pipe_stall = 1;
+                return nop;
+            }
+        }
 
             // Checking for Terminate Instruction and handling
+            /* For terminate instruction (addi zero,zero,1) */
             if(decode_out_n.opcode == ITYPE_ARITH && // opcode is ADDI
                 decode_out_n.rd == 0 && // destination register is  0
                 decode_out_n.rs1 == 0 && // source register is 0
-                decode_out_n.imm == 1
-                ) { // immediate value is 1
+                decode_out_n.imm == 1){ // immediate value is 1
 
-                /* For terminate instruction (addi zero,zero,1) */
                 if (dmem_busy || dmem_busy2) {
                     pipe_stall = 1;
                     return nop;
@@ -113,51 +113,57 @@ struct State decode() {
             }
 
 
-            // check for RAW, WAW, WAR hazards
-            if(decode_out_n.opcode != STYPE && decode_out_n.opcode != ITYPE_LOAD){
-                if(decode_out_n.rd != 0){
-                    // Check for WAW hazards
-                    if ((we_mem && (decode_out_n.rd == ws_mem)) ||
-                        (we_mem2 && (decode_out_n.rd == ws_mem2)) ||
-                        (we_exe && (decode_out_n.rd == ws_exe)) ||
-                        (we_wb && (decode_out_n.rd == ws_wb)) || 
-                        (we_ld_st_wb && (decode_out_n.rd == ws_ld_st_wb)) || 
-                        (we_ld_st_2_wb && (decode_out_n.rd == ws_ld_st_2_wb))) {
-                        waw_hazard = 1;
-                    }
-                }
+        // checks for:
+        // - RAW hazards
+        // - WAW hazards
+        // - WAR hazards
+        if(decode_out_n.opcode != STYPE && decode_out_n.opcode != ITYPE_LOAD){
+            // Check for WAW hazards
+            if ((we_mem && (decode_out_n.rd == ws_mem)) ||
+                (we_mem2 && (decode_out_n.rd == ws_mem2))) {
+                waw_hazard = 1;
             }
-            
-
-
+        }
 
         // assigning load/store to available unit
         if (decode_out_n.opcode == ITYPE_LOAD || decode_out_n.opcode == STYPE) {
 
-            // Checking for RAW hazards
-            if(we_mem && decode_out_n.rs1 == ws_mem) raw_hazard = 1;
-            if(we_mem2 && decode_out_n.rs1 == ws_mem2) raw_hazard = 1;
-
             //Checking for WAR hazards
-            if (decode_out_n.opcode == STYPE) {
-                if (we_mem && decode_out_n.rd == ws_mem) war_hazard = 1;
-                if (we_mem2 && decode_out_n.rd == ws_mem2) war_hazard = 1;
+            if ((we_mem && (registers[decode_out_n.rs1] + decode_out_n.imm == ex_ld_st_out.mem_addr)) || 
+                (we_mem2 && (registers[decode_out_n.rs1] + decode_out_n.imm == ex_ld_st_2_out.mem_addr))) {
+                war_hazard = 1;
             }
 
 
-            if (!dmem_busy) {
-                decode_out_n.ld_st_unit = 1;
-            } else if (!dmem_busy2) {
-                decode_out_n.ld_st_unit = 2;
-            } else {
+            if (dmem_busy == 0) decode_out_n.ld_st_unit = 1;
+            else if (dmem_busy2 == 0) decode_out_n.ld_st_unit = 2;
+            else {
                 pipe_stall = 1;
                 return nop; // Stall if both units are busy
             }
         }
 
 
+        // RAW hazard detection
+        if (re_reg1 && decode_out_n.rs1 != 0) {
+            if (we_mem && decode_out_n.rs1 == ws_mem && dmem_busy) raw_hazard = 1;
+            else if (we_mem2 && decode_out_n.rs1 == ws_mem2 && dmem_busy2) raw_hazard = 1;
+        }
+        if (re_reg2 && decode_out_n.rs2 != 0) {
+            if (we_mem && decode_out_n.rs2 == ws_mem && dmem_busy) raw_hazard = 1;
+            else if (we_mem2 && decode_out_n.rs2 == ws_mem2 && dmem_busy2) raw_hazard = 1;
+        }
+
+
     } else { // In-order execution
-        
+
+
+        if(dmem_busy == 1){
+            pipe_stall = 1;
+            return nop;
+        }
+
+
         if (decode_out_n.opcode == ITYPE_LOAD || decode_out_n.opcode == STYPE) {
             decode_out_n.ld_st_unit = 1; // Always use the first unit
             if (dmem_busy) {
@@ -168,31 +174,38 @@ struct State decode() {
     }
 
 
- 
 
-    // 4. Check for forwarding enabled
+    // 4. Check for forwarding enabled - both ooo and in-order
     if (forwarding_enabled) {
-        if((decode_out_n.rs1 != 0) && re_reg1 == 1){
 
-            // stall the pipeline if there is a hazard
-            if(we_exe && decode_out_n.rs1 == ws_exe){
-                registers[decode_out_n.rs1] = dout_exe;
-            } else if(we_mem && decode_out_n.rs1 == ws_mem){
-                registers[decode_out_n.rs1] = dout_mem;
-            } else if(we_wb && decode_out_n.rs1 == ws_wb){
-                registers[decode_out_n.rs1] = dout_wb;
+        // stall the pipeline if there is a hazard
+        if((decode_out_n.rs1 != 0) && re_reg1 == 1){
+            if(we_exe && decode_out_n.rs1 == ws_exe) registers[decode_out_n.rs1] = dout_exe;
+            else if(we_mem && decode_out_n.rs1 == ws_mem) registers[decode_out_n.rs1] = dout_mem;
+            else if(we_wb && decode_out_n.rs1 == ws_wb) registers[decode_out_n.rs1] = dout_wb;
+
+            // out of order checks
+            if(ooo_enabled){
+                if(we_ld_st_wb && decode_out_n.rs1 == ws_ld_st_wb) registers[decode_out_n.rs1] = dout_ld_st_wb;
+                else if(we_ld_st_2_wb && decode_out_n.rs1 == ws_ld_st_2_wb) registers[decode_out_n.rs1] = dout_ld_st_2_wb;
+                else if(we_mem2 && decode_out_n.rs1 == ws_mem2) registers[decode_out_n.rs1] = dout_mem2;
             }
             decode_out_n.alu_in1 = registers[decode_out_n.rs1];
+
         }
-      
+
         if((decode_out_n.rs2 != 0) && re_reg2 == 1){
-            if(we_exe && decode_out_n.rs2 == ws_exe){
-                registers[decode_out_n.rs2] = dout_exe;
-            } else if(we_mem && decode_out_n.rs2 == ws_mem){
-                registers[decode_out_n.rs2]  = dout_mem;
-            } else if(we_wb && decode_out_n.rs2 == ws_wb){
-                registers[decode_out_n.rs2]  = dout_wb;
+            if(we_exe && decode_out_n.rs2 == ws_exe) registers[decode_out_n.rs2] = dout_exe;
+            else if(we_mem && decode_out_n.rs2 == ws_mem) registers[decode_out_n.rs2]  = dout_mem;
+            else if(we_wb && decode_out_n.rs2 == ws_wb) registers[decode_out_n.rs2]  = dout_wb;
+
+            // out of order checks
+            if(ooo_enabled){
+                if(we_ld_st_wb && decode_out_n.rs2 == ws_ld_st_wb) registers[decode_out_n.rs2] = dout_ld_st_wb;
+                else if(we_ld_st_2_wb && decode_out_n.rs2 == ws_ld_st_2_wb) registers[decode_out_n.rs2] = dout_ld_st_2_wb;
+                else if(we_mem2 && decode_out_n.rs2 == ws_mem2) registers[decode_out_n.rs2] = dout_mem2;
             }
+
             decode_out_n.alu_in2 = registers[decode_out_n.rs2];
         }
     } else {
@@ -208,6 +221,7 @@ struct State decode() {
         }
     }
 
+    // for both in-order and ooo
     if(raw_hazard == 1 || waw_hazard == 1 || war_hazard == 1){
         pipe_stall = 1;
         return nop;
@@ -230,7 +244,6 @@ struct State decode() {
 
             if (decode_out_n.opcode == STYPE) 
                 decode_out_n.mem_buffer = registers[decode_out_n.rs2];
-            
             break;
 
         case LUI:
@@ -269,7 +282,6 @@ struct State decode() {
  * Execute stage implementation
  */
 struct State execute() {
-    
 
     we_exe = 0;
     ws_exe = decode_out.rd;
@@ -283,7 +295,7 @@ struct State execute() {
     } else{
         if (decode_out.opcode == ITYPE_LOAD || decode_out.opcode == STYPE || dmem_busy == 1) return nop;
     }
-   
+
 
     ex_out_n = decode_out;
 
@@ -361,7 +373,7 @@ struct State execute_ld_st() {
     // dout_mem = 0;
     ex_ld_st_out_n = decode_out; // Copy decode_out to ex_ld_st_out_n
 
-    if(dmem_busy == 0 && ex_ld_st_out_n.ld_st_unit != 1){
+    if(dmem_busy == 0 || ex_ld_st_out_n.ld_st_unit != 1){
         return nop;
     }
 
@@ -392,6 +404,8 @@ struct State execute_ld_st() {
                 if(ex_ld_st_out_n.rd != 0) ws_mem = ex_ld_st_out_n.rd;
             } else if (ex_ld_st_out_n.opcode == STYPE) {
                 memory[ex_ld_st_out_n.mem_addr] = ex_ld_st_out_n.mem_buffer; // Store value
+                ws_mem = 0;
+                we_mem =0;
             }
             dout_mem = ex_ld_st_out_n.mem_buffer; // Data to write back
             dmem_busy=0;
@@ -412,7 +426,7 @@ struct State execute_2nd_ld_st() {
     ex_ld_st_2_out_n = decode_out;
 
 
-    if(ex_ld_st_2_out_n.ld_st_unit != 2){
+    if(dmem_busy2 == 0 && ex_ld_st_2_out_n.ld_st_unit != 2){ 
         return nop;
     }
 
@@ -421,7 +435,7 @@ struct State execute_2nd_ld_st() {
         dmem_cycles2 = 1;
         ex_ld_st_2_out_n.mem_addr = ex_ld_st_2_out_n.alu_in1 + ex_ld_st_2_out_n.alu_in2;
         return ex_ld_st_2_out_n;
-    }
+    } 
 
     if (dmem_busy2 == 1) {
         ex_ld_st_2_out_n = ex_ld_st_2_out;
@@ -434,6 +448,8 @@ struct State execute_2nd_ld_st() {
                 ws_mem2 = ex_ld_st_2_out_n.rd;
             } else if (ex_ld_st_2_out_n.opcode == STYPE) {
                 memory[ex_ld_st_2_out_n.mem_addr] = ex_ld_st_2_out_n.mem_buffer;
+                ws_mem2 = 0;
+                we_mem2 = 0;
             }
             dout_mem2 = ex_ld_st_2_out_n.mem_buffer;
             dmem_busy2 = 0;
@@ -459,7 +475,7 @@ void writeback() {
 
     if(ooo_enabled){ // out of order
         // write back for non-memory instructions
-        if(ex_out.inst != nop.inst && dmem_busy == 0 && dmem_busy2 == 0){
+        if(ex_out.inst != nop.inst){
             wb_out_n = ex_out;
             if(ex_out.opcode == RTYPE || ex_out.opcode == ITYPE_ARITH || ex_out.opcode == LUI){
                 registers[ex_out.rd] = ex_out.alu_out;
@@ -480,7 +496,7 @@ void writeback() {
 
 
         // write back for memory instructions - first load/store unit
-        if(ex_ld_st_out.inst != nop.inst && dmem_busy == 0 && dmem_busy2 == 0){
+        if(ex_ld_st_out.inst != nop.inst && dmem_busy == 0){
             wb_ld_st_out_n = ex_ld_st_out;
             if(wb_out_n.opcode == ITYPE_LOAD){
                 registers[wb_out_n.rd] = ex_ld_st_out.mem_buffer;
@@ -491,7 +507,6 @@ void writeback() {
         } else {
             wb_ld_st_out_n = nop;
         }
-
 
         // write back for memory instructions - second load/store unit
         if(ex_ld_st_2_out.inst != nop.inst && dmem_busy2 == 0){
@@ -527,7 +542,7 @@ void writeback() {
         if (dmem_busy && (ex_ld_st_out.opcode == ITYPE_LOAD || ex_ld_st_out.opcode == STYPE)) wb_out_n = nop;  // Stall writeback stage as memory operation is not finished yet
 
         // priority order: execute -> load/store -> load/store 2
-        if(ex_out.inst != nop.inst){
+        if(ex_out.inst != nop.inst && dmem_busy == 0){
             wb_out_n = ex_out;
             if(ex_out.opcode == RTYPE || ex_out.opcode == ITYPE_ARITH || ex_out.opcode == LUI){
                 registers[ex_out.rd] = ex_out.alu_out; // Writing the ALU result to the destination register
@@ -545,7 +560,7 @@ void writeback() {
         }
 
         //LOAD 
-        if(ex_ld_st_out.inst != nop.inst){
+        if(ex_ld_st_out.inst != nop.inst && dmem_busy == 0){
             wb_out_n = ex_ld_st_out;
             if(wb_out_n.opcode == ITYPE_LOAD){
                 registers[wb_out_n.rd] = ex_ld_st_out.mem_buffer; // Writing the loaded value into the destination register
