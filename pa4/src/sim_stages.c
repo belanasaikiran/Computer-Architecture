@@ -443,10 +443,6 @@ struct State execute_ld_st() {
             dout_mem = ex_ld_st_out_n.mem_buffer; // Data to write back
             dmem_busy=0;
             dmem_cycles=0;
-            // printf("Resetting Memory flags\n");
-            // printf("Memory access complete \n");
-            // printf("Memory buffer: %d\n", ex_ld_st_out_n.mem_buffer);
-            // printf("Done with opcode: %d\n", ex_ld_st_out_n.opcode);
         }
         return ex_ld_st_out_n;
     }
