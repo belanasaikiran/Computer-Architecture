@@ -1,0 +1,7 @@
+                           Block 0        Block 1        Block 2        Block 3    
+Set No.  LRU b2|b1|b0   Valid  Tag     Valid  Tag     Valid  Tag     Valid  Tag     
+-------  ------------   -----  ---     -----  ---     -----  ---     -----  ---     
+      0       0  0  0       0    0         0    0         0    0         0    0     
+      1       0  0  0       0    0         0    0         0    0         0    0     
+      2       0  0  0       0    0         0    0         0    0         0    0     
+      3       0  0  0       0    0         0    0         0    0         0    0     
