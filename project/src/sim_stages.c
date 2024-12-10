@@ -52,24 +52,34 @@ struct State fetch() {
     }
     else if (pipe_stall){  //this has been modified now we dont stall on a dmem_busy
         return fetch_out;
-    }else {
-        if (branch_prediction_enabled) {  // Check if branch prediction is enabled
-            if (BTB_lookup(pc)) {         // Check for a BTB hit
-                int prediction = predict_direction(pc); // Predict branch direction
-                if (prediction) {  // Predicted as taken
-                    pc_n = BTB_target(pc);  // Use the BTB target address
-                    fetch_out_n.br_predicted = 1; // Mark as branch predicted
-                } else {  // Predicted as not taken
-                    pc_n = pc + 4; // Use sequential PC
-                    fetch_out_n.br_predicted = 0; // Mark as not branch predicted
+    } else {
+
+        /* if branch_prediction_enabled is set to 1 or 2, then BTB_lookup() is used to check if the current instruction has a valid entry in the BTB. If so, then predict_direction()
+            is used to check the branch direction prediction. For a taken branch, the function BTB_target()
+            is used to get the target address, and the br_predicted flag set to ‘1’ to indicate a taken branch
+            predicted instruction. Otherwise, this field should be ‘0’.
+            In case of the dynamic predictors being enabled, the BTB hit and the BHT direction of ‘taken’ uses
+            the BTB target address to update the pc_n using advance_pc() function. Otherwise, the pc_n is
+            incremented using the not-taken path.*/
+        if(branch_prediction_enabled == 1 || branch_prediction_enabled == 2){
+            if (BTB_lookup(pc)) {
+                int prediction = predict_direction(pc);
+                if (prediction) {
+                    pc_n = BTB_target(pc);
+                    fetch_out_n.br_predicted = 1;
+                } else {
+                    pc_n = pc + 4;
+                    fetch_out_n.br_predicted = 0;
                 }
             } else {
-                pc_n = pc + 4; // Default to sequential PC if no BTB hit
-                fetch_out_n.br_predicted = 0; // Mark as not branch predicted
+                pc_n = pc + 4;
+                fetch_out_n.br_predicted = 0;
+                return fetch_out_n;
             }
         } else {
-            advance_pc(fetch_out_n.inst_addr + 4); // Default sequential advance if no branch prediction
+            advance_pc(fetch_out_n.inst_addr + 4);
         }
+
     }
 
     return fetch_out_n;
@@ -590,19 +600,26 @@ struct State execute() {
                 // increment the total_branches counter
                 total_branches++;
                 
-                // compare actual and predicted branches
-                if (br_taken != ex_out_n.br_predicted)
-                {
-                    br_mispredicted = 1; // Make sure to set br_mispredicted
-                    br_taken ? advance_pc(ex_out_n.br_addr): advance_pc(ex_out_n.inst_addr + 4);
-                } else{
-                    correctly_predicted_branches++;
-                }
-
-                // update branhc prediction structures
-                if(branch_prediction_enabled){
+                if(branch_prediction_enabled == 1 || branch_prediction_enabled == 2){
+                    // compare actual and predicted branches
+                    if (br_taken != ex_out_n.br_predicted)
+                    {
+                        br_mispredicted = 1; // Make sure to set br_mispredicted
+                        br_taken ? advance_pc(ex_out_n.br_addr): advance_pc(ex_out_n.inst_addr + 4);
+                    } else{
+                        correctly_predicted_branches++;
+                    }
+                    // update branhc prediction structures
                     BTB_update(ex_out_n.inst_addr, ex_out_n.br_addr); // update BTB
-                    direction_update(ex_out_n.inst_addr, br_taken); // update BHT
+                    direction_update(br_taken, ex_out_n.inst_addr); // update BHT
+                }
+                else {
+                    if(br_taken){
+                        br_mispredicted = 1; // Make sure to set br_mispredicted
+                        advance_pc(ex_out_n.br_addr);
+                    } else {
+                        correctly_predicted_branches++;
+                    }
                 }
 
 
@@ -639,8 +656,7 @@ struct State execute() {
  * Execute stage implementation for Load and Stores
  */
 struct State execute_ld_st() {
-
-  // read the decode_out state and start processing execute_ld_st stage's functionality 
+    // read the decode_out state and start processing execute_ld_st stage's functionality 
     ex_ld_st_out_n = decode_out;
 
     /* Reset relevant pipeline variables */
@@ -684,34 +700,6 @@ struct State execute_ld_st() {
             default:
                 break;
         }
-
-
-
-        // update the cache on cache miss
-        if(dcache_enabled){
-            // increment the cache hits counter and update the cache on cache miss
-            dmem_accesses++;
-
-            switch (dcache_enabled)
-            {
-            case 1:
-                dcache_lookup_DM(ex_ld_st_out.mem_addr);
-                break;
-
-            case 2:
-                dcache_lookup_2_way(ex_ld_st_out.mem_addr);
-                break;
-            
-            case 3:
-                dcache_lookup_4_way(ex_ld_st_out.mem_addr);
-                break;
-            
-            default:
-                break;
-            }
-        }
-
-
         return ex_ld_st_out;
     }
 
@@ -720,34 +708,6 @@ struct State execute_ld_st() {
     else if ((ex_ld_st_out_n.opcode == ITYPE_LOAD || ex_ld_st_out_n.opcode == STYPE) && ex_ld_st_out_n.ld_st_unit == 1) {
         dmem_busy = 1;
         dmem_cycles = 1;
-
-        // cache lookup
-        if(dcache_enabled){
-            int hit = -1;
-            switch (dcache_enabled)
-            {
-            case 1: // Direct Mapped Cache
-                hit = dcache_lookup_DM(ex_ld_st_out_n.mem_addr);
-                break;
-            case 2: // 2-way Set Associative Cache
-                hit = dcache_lookup_2_way(ex_ld_st_out_n.mem_addr);
-                break;
-            case 3: // 4-way Set Associative Cache
-                hit = dcache_lookup_4_way(ex_ld_st_out_n.mem_addr);
-                break;
-            }
-
-            // dmem_accesses++;
-
-            if(hit != -1){
-                dmem_cycles = dcache_access_cycles; // Cache hit
-                dcache_hits++;
-            } else {
-                dmem_cycles = dmem_access_cycles; // Cache miss
-            }
-        }else{
-            dmem_cycles = dmem_access_cycles; // default latency
-        }
 
         switch(ex_ld_st_out_n.opcode) {
             /* store, load (both calculate memory address in EX phase) */
@@ -765,7 +725,6 @@ struct State execute_ld_st() {
         dmem_busy = 0;
         return nop;
     }
-
 }
 
 
@@ -773,8 +732,7 @@ struct State execute_ld_st() {
  * Execute stage implementation for second Load and Stores
  */
 struct State execute_2nd_ld_st() {
-    
-  // read the decode_out state and start processing execute_ld_st stage's functionality 
+    // read the decode_out state and start processing execute_ld_st stage's functionality 
     ex_ld_st_2_out_n = decode_out;
 
     /* Reset relevant pipeline variables */
@@ -818,32 +776,6 @@ struct State execute_2nd_ld_st() {
             default:
                 break;
         }
-
-  
-
-        // update the cache on cache miss
-        if(dcache_enabled){
-        // increment the cache hits counter and update the cache on cache miss
-            dmem_accesses++;
-            switch (dcache_enabled)
-            {
-            case 1:
-                dcache_lookup_DM(ex_ld_st_2_out.mem_addr);
-                break;
-
-            case 2:
-                dcache_lookup_2_way(ex_ld_st_2_out.mem_addr);
-                break;
-            
-            case 3:
-                dcache_lookup_4_way(ex_ld_st_2_out.mem_addr);
-                break;
-            
-            default:
-                break;
-            }
-        }
-
         return ex_ld_st_2_out;
     }
 
@@ -852,35 +784,6 @@ struct State execute_2nd_ld_st() {
     else if ((ex_ld_st_2_out_n.opcode == ITYPE_LOAD || ex_ld_st_2_out_n.opcode == STYPE) && ex_ld_st_2_out_n.ld_st_unit == 2) {
         dmem_busy2 = 1;
         dmem_cycles2 = 1;
-
-
-        // cache lookup
-        if(dcache_enabled){
-            int hit = -1;
-            switch (dcache_enabled)
-            {
-            case 1: // Direct Mapped Cache
-                hit = dcache_lookup_DM(ex_ld_st_2_out_n.mem_addr);
-                break;
-            case 2: // 2-way Set Associative Cache
-                hit = dcache_lookup_2_way(ex_ld_st_2_out_n.mem_addr);
-                break;
-            case 3: // 4-way Set Associative Cache
-                hit = dcache_lookup_4_way(ex_ld_st_2_out_n.mem_addr);
-                break;
-            }
-
-            // dmem_accesses++;
-
-            if(hit != -1){
-                dmem_cycles2 = dcache_access_cycles; // Cache hit
-                dcache_hits++;
-            } else {
-                dmem_cycles2 = dmem_access_cycles; // Cache miss
-            }
-        }else{
-            dmem_cycles2 = dmem_access_cycles; // default latency
-        }
 
         switch(ex_ld_st_2_out_n.opcode) {
             /* store, load (both calculate memory address in EX phase) */
@@ -898,7 +801,6 @@ struct State execute_2nd_ld_st() {
         dmem_busy2 = 0;
         return nop;
     }
-
 }
 
 /**
@@ -1177,7 +1079,14 @@ unsigned int BTB_lookup(unsigned int inst_addr){
     - Compute the index using bits from the instruction address.
     - Verify if the inst_addr matches the BTB entry and the valid bit is set.
     - Return 1 if found (hit), otherwise 0 (miss).
-    */
+    
+
+   BTB_lookup() takes an instruction’s address as the input. The input instruction address determines
+if the indexed BTB entry’s instruction address matches the input instruction address, and if the
+entry is valid, 1 is returned (BTB hit). Otherwise, it must return 0 (BTB miss).
+
+*/
+
 
 
    uint32_t index = (inst_addr >> 2) & 0x1F; // extracting the bits from 2 - 6
@@ -1230,17 +1139,31 @@ unsigned int predict_direction(unsigned int inst_addr){
     Logic:
     - Use the instruction address to index into the BHT (1-level) or combine with BHSR (2-level).
     - Interpret the 2-bit state to decide "Taken" or "Not Taken".
+    
+    For a 1-level predictor the function takes an instruction address to index into
+    the BHT, whereas for a 2-level predictor BHSR is used to index into the BHT and the corresponding
+    prediction bits are checked as shown in 1.1. If the bits indicate “T” or “TN”, then this function returns
+    ‘1’ (for predict branch taken). Otherwise, this function returns ‘0’ (for branch not taken).
     */
 
-    uint32_t index = (inst_addr >> 2) & 0x1F; // extracting bits 2-6
+    uint32_t index;
+    if(branch_prediction_enabled == 1){
+        // 1-level predictor
+        index = (inst_addr >> 2) & 0x1F; // extract bits 2-6
+    } else if(branch_prediction_enabled == 2){
+        // 2-level predictor
+        index = ((inst_addr >> 2) & 0x1F) ^ bhsr; // extract bits 2-6 and XOR with BHSR
+    } else{
+        return 0; // no prediction
+    }
+
     uint32_t bht_state = bht[index];
 
     // strongly/weakly taken states
     if(bht_state == 2 || bht_state == 3){
         return 1; // predict as taken
-    }
-    return 0; // predict as not taken
-
+    } 
+    return 0; // predict as not taken for 0, 1 states - weakly/strongly not taken
     
 }
 
@@ -1253,18 +1176,59 @@ void direction_update(unsigned int direction,unsigned int inst_addr){
     Logic:
     - Update the 2-bit state in BHT based on the branch result (Taken or Not Taken).
     - Shift the result into the BHSR.
+    
+    The function takes the instruction address and the branch direction as the
+    input (‘1’ for taken, ‘0’ for not taken). For 1-level predictor the instruction address is used to index
+    into the BHT for update, whereas for 2-level predictor the BHSR is used to determine which BHT
+    entry is being updated. The state machine logic performs state transitions based on the actual
+    branch direction using 1.1.
+    For a 2-level predictor, the BHSR is also updated after updating the BHT. The input direction bit is
+    shifted into the BHSR by shifting the BHSR to the left by 1 and bitwise ORing the least significant
+    bit with the direction bit. Remember that only bits 4 to 0 are used to record branch
+    history, as the BHT has only 32 entries. Upper bits beyond bit 4 must be cleared to
+    ‘0’.
+    
+    
     */
 
-   uint32_t index = (inst_addr >> 2) & 0x1F; // extract bits 2 to 6
-   uint32_t bht_state = bht[index];
+//    uint32_t index = (inst_addr >> 2) & 0x1F; // extract bits 2 to 6
+//    uint32_t bht_state = bht[index];
 
-   // state transiitions
-   if(direction) { // actual branch taken
-    if(bht_state < 3) bht_state ++;
-   } else{ // actual is not taken
-    if(bht_state > 0) bht_state--;
-   }
-   bht[index] = bht_state; // update the BHT state
+//    // state transiitions
+//    if(direction) { // actual branch taken
+//     if(bht_state < 3) bht_state ++;
+//    } else{ // actual is not taken
+//     if(bht_state > 0) bht_state--;
+//    }
+//    bht[index] = bht_state; // update the BHT state
+
+    uint32_t index;
+    if(branch_prediction_enabled == 1){
+        // 1-level predictor
+        index = (inst_addr >> 2) & 0x1F; // extract bits 2-6
+    } else if(branch_prediction_enabled == 2){
+        // 2-level predictor
+        // index = ((inst_addr >> 2) ^ bhsr) & 0x1F; 
+        index = ((inst_addr >> 2) & 0x1F) ^ bhsr; // extract bits 2-6 and XOR with BHSR
+    } else{
+        return; // no prediction
+    }
+
+    uint32_t bht_state = bht[index];
+
+    // state transitions
+    if(direction) { // actual branch taken
+        if(bht_state < 3) bht_state ++;
+    } else{ // actual is not taken
+        if(bht_state > 0) bht_state--;
+    }
+    bht[index] = bht_state; // update the BHT state'
+
+    // update the BHSR for 2-level predictor
+    if(branch_prediction_enabled == 2){
+               bhsr = ((bhsr << 1) | direction) & 0x1F; // shift left and OR with direction, then mask to 5 bits
+    }
+
 
 
 }
