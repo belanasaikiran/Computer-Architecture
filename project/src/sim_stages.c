@@ -37,6 +37,11 @@ int mylog(int x){
 }
 
 
+
+// memory cycles
+int cache_access_cycles = 0;
+int cache_access_cycles2 = 0;
+
 /**
  * Fetch stage implementation.
  */
@@ -663,24 +668,41 @@ struct State execute_ld_st() {
     we_mem = 0;
     ws_mem = 0;
     dout_mem = 0;
+
+    // if(dcache_enabled != 1 || dcache_enabled != 2 || dcache_enabled != 3){
+    //     cache_access_cycles = dmem_access_cycles; // reset to 6 cycles
+    // }
     
     // operate on the ex_ld_st_out struct when dmem is busy executing a load or store multi-cycle instruction
     if (dmem_busy) {
         dmem_busy = 0; // this is needed if this is the last cycle of load or store execution
         
         /* Stall for the correct number of cycles */
-        if (++dmem_cycles < dmem_access_cycles){
+        if (++dmem_cycles < cache_access_cycles){
             dmem_busy = 1;
             if (ex_ld_st_out.opcode == ITYPE_LOAD)
             {
                 we_mem = 1;
                 ws_mem = ex_ld_st_out.rd; 
             }
+
+
             return ex_ld_st_out;
         /* After X cycles,reset cycles */
         } else {
             dmem_cycles = 1;
+            // last cycle update the cache
+            if(dcache_enabled == 1){
+                    dcache_update_DM(ex_ld_st_out.mem_addr); // update the cache
+                } else if(dcache_enabled == 2){
+                    dcache_update_2_way(ex_ld_st_out.mem_addr, ex_ld_st_2_out.cache_line_hit_way);
+                } else if(dcache_enabled == 3){
+                    dcache_update_4_way(ex_ld_st_out.mem_addr, ex_ld_st_2_out.cache_line_hit_way);
+                }
         }
+
+
+    
 
         // last cycle of a load or store performs the actual memory access
         switch (ex_ld_st_out.opcode) {
@@ -695,11 +717,16 @@ struct State execute_ld_st() {
 
             case STYPE:
                 memory[ex_ld_st_out.mem_addr] = ex_ld_st_out.mem_buffer;
+                
                 break;
 
             default:
                 break;
         }
+
+
+
+
         return ex_ld_st_out;
     }
 
@@ -708,6 +735,7 @@ struct State execute_ld_st() {
     else if ((ex_ld_st_out_n.opcode == ITYPE_LOAD || ex_ld_st_out_n.opcode == STYPE) && ex_ld_st_out_n.ld_st_unit == 1) {
         dmem_busy = 1;
         dmem_cycles = 1;
+
 
         switch(ex_ld_st_out_n.opcode) {
             /* store, load (both calculate memory address in EX phase) */
@@ -718,6 +746,50 @@ struct State execute_ld_st() {
                 ex_ld_st_out_n.mem_addr = ex_ld_st_out_n.alu_in1 + ex_ld_st_out_n.alu_in2;
                 break;
         }
+
+
+        // cache lookup
+        if(dcache_enabled == 1 || dcache_enabled == 2 || dcache_enabled == 3){
+            int hit = -1;
+            
+            switch (dcache_enabled)
+            {
+            case 1: // direct mapped
+                hit = dcache_lookup_DM(ex_ld_st_out_n.mem_addr);
+                // dcache_update_DM(ex_ld_st_out_n.mem_addr); // update the cache
+                break;
+            case 2: // 2-way set associative
+                hit = dcache_lookup_2_way(ex_ld_st_out_n.mem_addr);
+                // dcache_update_2_way(ex_ld_st_out_n.mem_addr, ex_ld_st_2_out.cache_line_hit_way);
+                break;
+            case 3: // 4-way  associative:
+                hit = dcache_lookup_4_way(ex_ld_st_out_n.mem_addr);
+                // dcache_update_4_way(ex_ld_st_out_n.mem_addr, ex_ld_st_2_out.cache_line_hit_way);
+                break;
+            default:
+                break;
+            }
+
+
+            dmem_accesses++; // increment the total number of memory accesses
+
+            if(hit != -1){
+                // printf("hit\n");
+                dcache_hits++; // increment the cache hits counter
+                cache_access_cycles = dcache_access_cycles; // set the number of cycles to access the cache
+            } else{
+                // printf("not a hit\n");
+                cache_access_cycles = dmem_access_cycles; // set the number of cycles to access the memory
+            }
+
+            // update dcache for 2-way and 4-way associative even if there is a miss
+            
+        } else{
+            cache_access_cycles = dmem_access_cycles; // set to 6 cycles when dcache is disabled
+        }
+
+
+
         return ex_ld_st_out_n;
     }
     else // for non load or store instructions or ld/st not destined to this unit, reset
@@ -739,23 +811,38 @@ struct State execute_2nd_ld_st() {
     we_mem2 = 0;
     ws_mem2 = 0;
     dout_mem2 = 0;
+
+    // if(dcache_enabled != 1 || dcache_enabled != 2 || dcache_enabled != 3){
+    //     cache_access_cycles = dmem_access_cycles; // reset to 6 cycles
+    // }
     
     // operate on the ex_ld_st_out struct when dmem is busy executing a load or store multi-cycle instruction
     if (dmem_busy2) {
         dmem_busy2 = 0; // this is needed if this is the last cycle of load or store execution
         
         /* Stall for the correct number of cycles */
-        if (++dmem_cycles2 < dmem_access_cycles){
+        if (++dmem_cycles2 < cache_access_cycles2){
             dmem_busy2 = 1;
             if (ex_ld_st_2_out.opcode == ITYPE_LOAD)
             {
                 we_mem2 = 1;
                 ws_mem2 = ex_ld_st_2_out.rd; 
             }
+
+           
             return ex_ld_st_2_out;
         /* After X cycles,reset cycles */
         } else {
             dmem_cycles2 = 1;
+            // last cycle update the cache
+                 if(dcache_enabled == 1){
+                    dcache_update_DM(ex_ld_st_2_out.mem_addr); // update the cache
+                } else if(dcache_enabled == 2){
+                    dcache_update_2_way(ex_ld_st_2_out.mem_addr, ex_ld_st_2_out.cache_line_hit_way);
+                } else if(dcache_enabled == 3){
+                    dcache_update_4_way(ex_ld_st_2_out.mem_addr, ex_ld_st_2_out.cache_line_hit_way);
+                }
+            // cache_access_cycles2 = dmem_access_cycles; // reset to 6 cycles
         }
 
         // last cycle of a load or store performs the actual memory access
@@ -771,11 +858,13 @@ struct State execute_2nd_ld_st() {
 
             case STYPE:
                 memory[ex_ld_st_2_out.mem_addr] = ex_ld_st_2_out.mem_buffer;
+
                 break;
 
             default:
                 break;
         }
+
         return ex_ld_st_2_out;
     }
 
@@ -784,6 +873,7 @@ struct State execute_2nd_ld_st() {
     else if ((ex_ld_st_2_out_n.opcode == ITYPE_LOAD || ex_ld_st_2_out_n.opcode == STYPE) && ex_ld_st_2_out_n.ld_st_unit == 2) {
         dmem_busy2 = 1;
         dmem_cycles2 = 1;
+
 
         switch(ex_ld_st_2_out_n.opcode) {
             /* store, load (both calculate memory address in EX phase) */
@@ -794,6 +884,62 @@ struct State execute_2nd_ld_st() {
                 ex_ld_st_2_out_n.mem_addr = ex_ld_st_2_out_n.alu_in1 + ex_ld_st_2_out_n.alu_in2;
                 break;
         }
+
+
+        // cache lookup
+        if(dcache_enabled == 1 || dcache_enabled == 2 || dcache_enabled == 3){
+            int hit = -1;
+            
+            switch (dcache_enabled)
+            {
+            case 1: // direct mapped
+                hit = dcache_lookup_DM(ex_ld_st_out_n.mem_addr);
+                // dcache_update_DM(ex_ld_st_out_n.mem_addr);
+                break;
+            case 2: // 2-way set associative
+                hit = dcache_lookup_2_way(ex_ld_st_out_n.mem_addr);
+                // dcache_update_2_way(ex_ld_st_out_n.mem_addr, ex_ld_st_2_out.cache_line_hit_way);
+                break;
+            case 3: // 4-way  associative
+                hit = dcache_lookup_4_way(ex_ld_st_out_n.mem_addr);
+                // dcache_update_4_way(ex_ld_st_out_n.mem_addr, ex_ld_st_2_out.cache_line_hit_way);
+                break;
+            default:
+                break;
+            }
+
+
+            dmem_accesses++; // increment the total number of memory accesses
+
+            if(hit != -1){
+                // printf("hit\n");
+                dcache_hits++; // increment the cache hits counter
+                cache_access_cycles2 = dcache_access_cycles; // set the number of cycles to access the cache
+            } else{
+                // printf("not a hit\n");
+                cache_access_cycles2 = dmem_access_cycles; // set the number of cycles to access the memory
+            }
+
+            // update dcache for 2-way and 4-way associative
+            // if(hit == 2){
+            //     dcache_update_2_way(ex_ld_st_out_n.mem_addr, ex_ld_st_2_out.cache_line_hit_way);
+            // } else if(hit == 4){
+            //     dcache_update_4_way(ex_ld_st_out_n.mem_addr, ex_ld_st_2_out.cache_line_hit_way);
+            // }
+            
+        } else{
+            cache_access_cycles2 = dmem_access_cycles; // set to 6 cycles when dcache is disabled
+        }
+
+        // switch(ex_ld_st_2_out_n.opcode) {
+        //     /* store, load (both calculate memory address in EX phase) */
+        //     case ITYPE_LOAD:
+        //     we_mem2 = 1;
+        //     ws_mem2 = ex_ld_st_2_out_n.rd;
+        //     case STYPE:
+        //         ex_ld_st_2_out_n.mem_addr = ex_ld_st_2_out_n.alu_in1 + ex_ld_st_2_out_n.alu_in2;
+        //         break;
+        // }
         return ex_ld_st_2_out_n;
     }
     else // for non load or store instructions, reset
@@ -1074,22 +1220,29 @@ void advance_pc(int step) {
 unsigned int BTB_lookup(unsigned int inst_addr){
    /*
     Checks if the instruction is in the Branch Target Buffer (BTB).
-    Logic:
 
+    Logic:
     - Compute the index using bits from the instruction address.
     - Verify if the inst_addr matches the BTB entry and the valid bit is set.
     - Return 1 if found (hit), otherwise 0 (miss).
-    
 
    BTB_lookup() takes an instruction’s address as the input. The input instruction address determines
-if the indexed BTB entry’s instruction address matches the input instruction address, and if the
-entry is valid, 1 is returned (BTB hit). Otherwise, it must return 0 (BTB miss).
-
+   if the indexed BTB entry’s instruction address matches the input instruction address, and if the
+   entry is valid, 1 is returned (BTB hit). Otherwise, it must return 0 (BTB miss).
 */
 
+    uint32_t index;
+    if(branch_prediction_enabled == 1){
+        // 1-level predictor
+        index = (inst_addr >> 2) & 0x1F; // extract bits 2-6
+    } else if(branch_prediction_enabled == 2){
+        // 2-level predictor
+        index = bhsr & 0x1F; // extract bits 2-6 and XOR with BHSR 
+        // index = ((inst_addr >> 2) & 0x1F) ^ bhsr; // extract bits 2-6 and XOR with BHSR
+    } else{
+        return 0; // no prediction
+    }
 
-
-   uint32_t index = (inst_addr >> 2) & 0x1F; // extracting the bits from 2 - 6
    if(btb[index].valid && btb[index].inst_addr == inst_addr){
         return 1; // BTB Hit
    }
@@ -1108,7 +1261,16 @@ unsigned int BTB_target(unsigned int inst_addr){
     - Similar indexing as BTB_lookup.
     - Return the target address.*/
 
-    uint32_t index = (inst_addr >> 2) & 0x1F; // extracting biuts 2-6
+    uint32_t index;
+    if(branch_prediction_enabled == 1){
+        // 1-level predictor
+        index = (inst_addr >> 2) & 0x1F; // extract bits 2-6
+    } else if(branch_prediction_enabled == 2){
+        // 2-level predictor
+        index = bhsr & 0x1F; // extract bits 2-6 and XOR with BHSR
+    } else{
+        return 0; // no prediction
+    }
     return btb[index].branch_target; // return target address
 }
 
@@ -1123,7 +1285,16 @@ void BTB_update(unsigned int inst_addr, unsigned int branch_target){
     - Compute the index from the instruction address.
     - Update the BTB entry with the inst_addr, branch_target, and set valid to 1.*/
 
-    uint32_t index = (inst_addr >> 2) & 0x1F; // extracting bits 2-6
+    uint32_t index;
+    if(branch_prediction_enabled == 1){
+        // 1-level predictor
+        index = (inst_addr >> 2) & 0x1F; // extract bits 2-6
+    } else if(branch_prediction_enabled == 2){
+        // 2-level predictor
+        index = bhsr & 0x1F; // extract bits 2-6 and XOR with BHSR
+        // index = ((inst_addr >> 2) & 0x1F) ^ bhsr; // extract bits 2-6 and XOR with BHSR
+    } 
+
     btb[index].inst_addr = inst_addr;
     btb[index].branch_target = branch_target;
     btb[index].valid = 1; // set entry as valid
@@ -1152,7 +1323,8 @@ unsigned int predict_direction(unsigned int inst_addr){
         index = (inst_addr >> 2) & 0x1F; // extract bits 2-6
     } else if(branch_prediction_enabled == 2){
         // 2-level predictor
-        index = ((inst_addr >> 2) & 0x1F) ^ bhsr; // extract bits 2-6 and XOR with BHSR
+        index = bhsr & 0x1F; // extract bits 2-6 and XOR with BHSR
+        // index = ((inst_addr >> 2) & 0x1F) ^ bhsr; // extract bits 2-6 and XOR with BHSR
     } else{
         return 0; // no prediction
     }
@@ -1187,20 +1359,9 @@ void direction_update(unsigned int direction,unsigned int inst_addr){
     bit with the direction bit. Remember that only bits 4 to 0 are used to record branch
     history, as the BHT has only 32 entries. Upper bits beyond bit 4 must be cleared to
     ‘0’.
-    
-    
     */
 
-//    uint32_t index = (inst_addr >> 2) & 0x1F; // extract bits 2 to 6
-//    uint32_t bht_state = bht[index];
 
-//    // state transiitions
-//    if(direction) { // actual branch taken
-//     if(bht_state < 3) bht_state ++;
-//    } else{ // actual is not taken
-//     if(bht_state > 0) bht_state--;
-//    }
-//    bht[index] = bht_state; // update the BHT state
 
     uint32_t index;
     if(branch_prediction_enabled == 1){
@@ -1209,7 +1370,8 @@ void direction_update(unsigned int direction,unsigned int inst_addr){
     } else if(branch_prediction_enabled == 2){
         // 2-level predictor
         // index = ((inst_addr >> 2) ^ bhsr) & 0x1F; 
-        index = ((inst_addr >> 2) & 0x1F) ^ bhsr; // extract bits 2-6 and XOR with BHSR
+        index = bhsr & 0x1F; // extract bits 2-6 and XOR with BHSR
+        // index = ((inst_addr >> 2) & 0x1F) ^ bhsr; // extract bits 2-6 and XOR with BHSR
     } else{
         return; // no prediction
     }
@@ -1218,7 +1380,7 @@ void direction_update(unsigned int direction,unsigned int inst_addr){
 
     // state transitions
     if(direction) { // actual branch taken
-        if(bht_state < 3) bht_state ++;
+        if(bht_state < 3) bht_state++;
     } else{ // actual is not taken
         if(bht_state > 0) bht_state--;
     }
@@ -1226,7 +1388,7 @@ void direction_update(unsigned int direction,unsigned int inst_addr){
 
     // update the BHSR for 2-level predictor
     if(branch_prediction_enabled == 2){
-               bhsr = ((bhsr << 1) | direction) & 0x1F; // shift left and OR with direction, then mask to 5 bits
+        bhsr = ((bhsr << 1) | direction) & 0x1F; // shift left and OR with direction, then mask to 5 bits
     }
 
 
@@ -1241,17 +1403,9 @@ void direction_update(unsigned int direction,unsigned int inst_addr){
  */
 
 unsigned int dcache_lookup_4_way(unsigned int addr_mem) {
-/*
-    Determines if a memory address is in the cache (hit/miss).
-    Logic:
-    - Parse the memory address into index, tag, and offset bits.
-    - For the respective cache (DM, 2-way, or 4-way):
-        - Check if the valid bit is set and the tag matches.
-        - Return the way of the hit, or -1 for a miss.
-*/
 
-    uint32_t index = (addr_mem >> 2) & 0x3; // extracting index bits (4 sets)
-    uint32_t tag = addr_mem >> 8; // extracting bits 7-31
+    uint32_t index = (addr_mem >> 4) & 0x3; // extracting index bits (4 sets)
+    uint32_t tag = addr_mem >> 6; // extracting bits 7-31
 
 
     // check if the valid bit is set and the tag matches
@@ -1269,9 +1423,16 @@ unsigned int dcache_lookup_4_way(unsigned int addr_mem) {
  * Data cache update
  */
 void dcache_update_4_way(unsigned int addr_mem, int line) {
+
+    /*
+        For a 4-way set associative cache the lru_tree bits are used to make this decision. First, bit 0 (the
+LSB) is checked. If it is ‘0’, then bit 1 is checked. If bit 1 is ‘0’ then block 3 is selected as the block
+to be updated, otherwise block 2 is selected. If bit 0 is ‘1’, then bit 1 is checked instead. If bit 1 is
+‘0’, block 0 is the selected block to be updated, otherwise block 1 is selected.
+*/
     
-    uint32_t index = (addr_mem >> 2) & 0x3; // extracting index bits 2-3
-    uint32_t tag = addr_mem >> 8; // extracting tag bits 7-31
+    uint32_t index = (addr_mem >> 4) & 0x3; // extracting index bits 2-3
+    uint32_t tag = addr_mem >> 6; // extracting tag bits 6-31
 
     if(line >= 0){
         // cache hit: update the cache block
@@ -1280,21 +1441,35 @@ void dcache_update_4_way(unsigned int addr_mem, int line) {
     } else{
         // cache miss: Find LRU block and update
         uint8_t lru_bits = dcache_4_way[index].lru_tree;
-        int lru_block = (lru_bits == 0b00) ? 0 : (lru_bits == 0b01) ? 1 : (lru_bits == 0b10) ? 2 : 3;
+        int lru_block;
+
+        if ((lru_bits & 0x1) == 0) {
+            if ((lru_bits & 0x2) == 0) {
+                lru_block = 3;
+            } else {
+                lru_block = 2;
+            }
+        } else {
+            if ((lru_bits & 0x2) == 0) {
+                lru_block = 0;
+            } else {
+                lru_block = 1;
+            }
+        }
 
         dcache_4_way[index].block[lru_block].tag = tag;
         dcache_4_way[index].block[lru_block].valid = 1; // set the valid bit
 
         // update the LRU tree for the next cycle
-        dcache_4_way[index].lru_tree = (lru_block + 1) % 4;
+        dcache_4_way[index].lru_tree = (lru_bits & 0x1) ? (lru_bits & 0x2) ? 0b00 : 0b01 : (lru_bits & 0x2) ? 0b10 : 0b11;
     }
     
 }
 
 
 unsigned int dcache_lookup_2_way(unsigned int addr_mem) {
-    uint32_t index = (addr_mem >> 4) & 0x7; // extract index bits (16 sets)
-    uint32_t tag = addr_mem >> 8; // extract tag bits (24 bits)
+    int32_t index = (addr_mem >> 4) & 0x7; // extract index bits (3 bits for 8 sets)
+    uint32_t tag = addr_mem >> 7; // extract tag bits
 
     // check if the valid bit is set and the tag matches
     for(int i = 0; i < 2; i++){
@@ -1313,7 +1488,7 @@ unsigned int dcache_lookup_2_way(unsigned int addr_mem) {
 void dcache_update_2_way(unsigned int addr_mem, int line) {
 
   uint32_t index = (addr_mem >> 4) & 0x7; // extracting bits 4-6
-    uint32_t tag = addr_mem >> 8; // extracting bits 7-31
+    uint32_t tag = addr_mem >> 7; // extracting bits 7-31
 
     if(line >= 0){
         // cache hit: update the cache block
@@ -1321,7 +1496,20 @@ void dcache_update_2_way(unsigned int addr_mem, int line) {
         dcache_2_way[index].block[line].valid = 1; // set the valid bit
     } else{
         //cache miss: Find LRU block and update
-        int lru = (dcache_2_way[index].lru_tree == 0) ? 0 : 1;
+        int lru = -1; // least recently used block
+        for(int i = 0; i < 2; i++){
+            if(!dcache_2_way[index].block[i].valid){ // find an invalid block
+                lru = i;
+                break;
+            }
+        }
+
+        // if no invalid block found, use LRU block
+        if (lru == -1)
+        {
+            lru = (dcache_2_way[index].lru_tree == 0) ? 0 : 1;
+        }
+        
         dcache_2_way[index].block[lru].tag = tag;
         dcache_2_way[index].block[lru].valid = 1; // set the valid bit
 
@@ -1336,16 +1524,25 @@ void dcache_update_2_way(unsigned int addr_mem, int line) {
 // One way data cache implementation
 unsigned int dcache_lookup_DM(unsigned int addr_mem) {
 
+    // cache size = 256 Bytes
+    // block size = 16 Bytes
+    // number of blocks = 16 or cache lines = 256/16 = 16
+
+    // index bits = log2(16) = 4 bits
+    // tag bits = 32 - 4 - 4 = 24 bits
+
+    // index is 4 bits
     uint32_t index = (addr_mem >> 4) & 0xF; // extract index bits (16 sets)
     uint32_t tag = addr_mem >> 8; // extract tag bits (24 bits)
+
+    // print the index and tag bits in binary format
+    // which line to access in the cache
 
     // check if the valid bit is set and the tag matches
     if(dcache_DM[index].block[0].valid && dcache_DM[index].block[0].tag == tag){
         return 0; // hit in way 0
     }
-    return -1; // miss
-    
-
+    return -1; // miss   
 }
 
 
@@ -1354,13 +1551,12 @@ unsigned int dcache_lookup_DM(unsigned int addr_mem) {
  */
 void dcache_update_DM(unsigned int addr_mem) {
     
-    uint32_t index = (addr_mem >> 2) & 0x1F; // extracting bits 2-6
-    uint32_t tag = addr_mem >> 8; // extracting bits 7-31
+    uint32_t index = (addr_mem >> 4) & 0xF; // extracting bits 4-7
+    uint32_t tag = addr_mem >> 8; // extracting bits 8-31
 
-    // update the cache block
+    // cache hit: update the cache block
     dcache_DM[index].block[0].tag = tag;
     dcache_DM[index].block[0].valid = 1; // set the valid bit
- 
 
 
 }
