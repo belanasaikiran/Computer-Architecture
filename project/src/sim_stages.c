@@ -38,7 +38,7 @@ int mylog(int x){
 
 
 
-// memory cycles
+// memory cycles - used to keep track of the number of cycles for memory access for cache enabled and disabled
 int cache_access_cycles = 0;
 int cache_access_cycles2 = 0;
 
@@ -104,40 +104,21 @@ struct State decode() {
     pipe_stall = 0;
     j_taken = 0;
 
+    if (br_mispredicted == 1) return nop; //branch misprediction - insert a bubble
     
-    /* If branch taken (resolved in EX stage) then inject NOP */
-    if (br_mispredicted){
-        return nop;
-    }
-
     // struct State *ptr = &fetch_out;
     decode_fields(&decode_out_n);
 
     /* Used to check if rs1 pr rs2 is read */
-    int rs1_read = 0;
-    int rs2_read = 0;
+    int re_reg1 = 0;
+    int re_reg2 = 0;
 
-    /**
-     * Determine which registers the current instruction will read
-     */
-    switch(decode_out_n.opcode){
-        /* All R-types, B-types, and S-types use rs1 / rs2 as operands */
-        case RTYPE:
-        case BTYPE:
-        case STYPE:
-            rs1_read = 1; 
-            rs2_read = 1;
-            break;
-
-        /* All I-types only read from rs1 */
-        case ITYPE_ARITH:
-        case ITYPE_LOAD:
-        case JALR:
-            rs1_read = 1;
-        
-        /* Other instructions don't do reads on rs1 / rs2*/
-        default:
-            break;
+  // Interlock logic
+    if (decode_out_n.opcode == RTYPE || decode_out_n.opcode == STYPE || decode_out_n.opcode == BTYPE) {
+        re_reg1 = 1;
+        re_reg2 = 1;
+    } else if (decode_out_n.opcode == ITYPE_LOAD || decode_out_n.opcode == ITYPE_ARITH || decode_out_n.opcode == JALR) {
+        re_reg1 = 1;
     }
 
     /**
@@ -152,7 +133,7 @@ struct State decode() {
      * Pipeline interlock checks
      */
     /* rs1 register (make sure we are reading from rs1 and that the register is not x0!)*/
-    if (rs1_read == 1 && decode_out_n.rs1 != 0)
+    if (re_reg1 == 1 && decode_out_n.rs1 != 0)
     {
         /* Execute stage of Non Load Store */
         if (we_exe && (decode_out_n.rs1 == ws_exe)) {
@@ -211,7 +192,7 @@ struct State decode() {
     }
 
     /* rs2 register (make sure we are reading from rs2 and that the register is not x0!)*/
-    if (rs2_read == 1 && decode_out_n.rs2 != 0) {
+    if (re_reg2 == 1 && decode_out_n.rs2 != 0) {
         /* Execute stage of ALU*/
         if (we_exe && (decode_out_n.rs2 == ws_exe)) {
             rs2_source = dout_exe;
@@ -258,7 +239,6 @@ struct State decode() {
                 raw_hazard = 1;
             }
 
-            // OK: WB of 2nd Ld/St unit
             if (we_ld_st_2_wb && (decode_out_n.rs2 == ws_ld_st_2_wb)) {
                 rs2_source = dout_ld_st_2_wb;
                 raw_hazard = 1;
@@ -270,9 +250,12 @@ struct State decode() {
 
     int ld_st_addr = 0;
 
+   // *******************************************************************
+    // ************ Out of order execution check and handling ************
+    // *******************************************************************
+
     if (ooo_enabled)
     {
-
         // //checks for WAW between Load Store and other instructions 
         //(if we have a Load followed by a Non-Load instruction writing to same  
         //output register, as the Non-Load instruction take a single cycle it will
@@ -286,9 +269,6 @@ struct State decode() {
                 pipe_stall = 1;
                 return nop;
             }
-
-            //HK: also add WAW check for second FU
-            //this means we have a WAW dependancy
             if (dmem_busy2 && ws_mem2 == decode_out_n.rd && we_mem2)
             {
                 pipe_stall = 1;
@@ -346,7 +326,6 @@ struct State decode() {
                 }
             }
         }
-
 
         //handling Load after Store Dependacy (Potential RAW hazard)
         //If Store takes more cycles to write to memory addr
@@ -409,8 +388,6 @@ struct State decode() {
 
         /*there is a termination condition after a LW or SW*/
         if (decode_out_n.opcode == ITYPE_ARITH && decode_out_n.rd == 0 && decode_out_n.rs1 == 0 && decode_out_n.imm == 1) {
-            //this means we have a structural hazard
-            //HK
             if (dmem_busy || dmem_busy2)
             {
                 pipe_stall = 1;
@@ -436,12 +413,9 @@ struct State decode() {
         return nop; // If the pipeline is stalled then return a nop
     }
         
-    /**
-     * Instruction-specific decode logic (should now read rs1/rs2_source rather than directly from register)
-     */
+    // Determine the instruction type based on the opcode
     switch(decode_out_n.opcode){
 
-        /* All R-types use rs1 / rs2 as alu1 / alu2 */
         case RTYPE:
             decode_out_n.alu_in1 = rs1_source;
             decode_out_n.alu_in2 = rs2_source;
@@ -482,11 +456,9 @@ struct State decode() {
             decode_out_n.br_addr = decode_out_n.inst_addr + decode_out_n.imm; //Branches need to store jump address
             break;
 
-        /* lui does nothing */
         case LUI:
             break;
 
-        /* jal needs to decode imm accordingly, link the address, and change the next pc */
         case JAL:
             j_taken = 1; // Make sure to set j_taken
             decode_out_n.link_addr = decode_out_n.inst_addr + 4; //JALR needs to save the next inst addr for WB
@@ -502,24 +474,17 @@ struct State decode() {
  * Execute stage implementation
  */
 struct State execute() {
-  // read the decode_out state and start processing execute stage's functionality 
     ex_out_n = decode_out;
 
-    /* Reset relevant pipeline variables */    
     we_exe = 0;
     ws_exe = 0;
     dout_exe = 0;
 
     br_mispredicted = 0;
 
-    // this logic detects if the decoded instruction is being converted to a NOP
-    // it also detects if a valid load or store type instruction is being executed
     if (ex_out_n.inst == nop.inst || ex_out_n.opcode == ITYPE_LOAD || ex_out_n.opcode == STYPE) {
         return nop;
-    }
-
-    // for NON LOAD or STORE instruction types, perform the execute functionality
-    else {
+    } else {
        int br_taken;
 
         /* Any instruction that writes back does so to the rd register */
@@ -527,76 +492,44 @@ struct State execute() {
 
         /* Start decoding instructions */
         switch(ex_out_n.opcode){   
-            /* Check if it is R-type or arithmatic I-type */
-            case RTYPE:
-            case ITYPE_ARITH:
-                we_exe = 1; // All R-type and I-type arithmatic write to rd 
-                switch(ex_out_n.funct3){
-                    /* add, addi, or sub */ 
-                    case ADD_SUB:
-                        /* sub */
-                        if (ex_out_n.opcode == RTYPE && ex_out_n.funct3 == ADD_SUB && ex_out_n.funct7){
-                            ex_out_n.alu_out = ex_out_n.alu_in1 - ex_out_n.alu_in2;
-                        
-                        /* add, addi */
-                        }else{ 
-                            ex_out_n.alu_out = ex_out_n.alu_in1 + ex_out_n.alu_in2;
-                        }
-                        break; 
-
-                    /* and, andi */
-                    case AND:
-                        ex_out_n.alu_out = ex_out_n.alu_in1 & ex_out_n.alu_in2;
-                        break;
-
-                    /* or, ori */
-                    case OR:
-                        ex_out_n.alu_out = ex_out_n.alu_in1 | ex_out_n.alu_in2;
-                        break;
-                    
-                    /* xor, xori */
-                    case XOR:
-                        ex_out_n.alu_out = ex_out_n.alu_in1 ^ ex_out_n.alu_in2;
-                        break;
-                    
-                    /* sll, slli */
-                    case SLL:
-                        ex_out_n.alu_out = ex_out_n.alu_in1 << ex_out_n.alu_in2;
-                        break;
-                    
-                    /* srl, srli */
-                    case SRL:
-                        ex_out_n.alu_out = ex_out_n.alu_in1 >> ex_out_n.alu_in2;
-                        break;
-                    
-                    /*slt, slti */
-                    case SLT:
-                        ex_out_n.alu_out = ex_out_n.alu_in1 < ex_out_n.alu_in2;
-                        break;
+        case RTYPE:
+        case ITYPE_ARITH:
+            if (ex_out_n.funct3 == ADD_SUB) {
+                if(ex_out_n.funct7 == SUB_F7){
+                ex_out_n.alu_out = ex_out_n.alu_in1 - ex_out_n.alu_in2;
+                } else {
+                ex_out_n.alu_out = ex_out_n.alu_in1 + ex_out_n.alu_in2;
                 }
-                break;
+            } else if (ex_out_n.funct3 == SLT) {
+                ex_out_n.alu_out = (ex_out_n.alu_in1 < ex_out_n.alu_in2) ? 1 : 0;
+            } else if (ex_out_n.funct3 == SLL) {
+                ex_out_n.alu_out = ex_out_n.alu_in1 << ex_out_n.alu_in2;
+            } else if (ex_out_n.funct3 == SRL) {
+                ex_out_n.alu_out = ex_out_n.alu_in1 >> ex_out_n.alu_in2;
+            } else if (ex_out_n.funct3 == AND) {
+                ex_out_n.alu_out = ex_out_n.alu_in1 & ex_out_n.alu_in2;
+            } else if (ex_out_n.funct3 == OR) {
+                ex_out_n.alu_out = ex_out_n.alu_in1 | ex_out_n.alu_in2;
+            } else if (ex_out_n.funct3 == XOR) {
+                ex_out_n.alu_out = ex_out_n.alu_in1 ^ ex_out_n.alu_in2;
+            } else {}
+            we_exe = 1; // All R-type and I-type arithmatic write to rd 
+            break;
 
 
             /* bne, beq, blt, bge (all branches compute equalities + branch in EX phase) */
             case BTYPE:
                 switch(ex_out_n.funct3)
                 {
-                    /* beq */
                     case BEQ:
                         br_taken = ex_out_n.alu_in1 == ex_out_n.alu_in2;
                         break;
-                    
-                    /* bne */
                     case BNE:
                         br_taken = ex_out_n.alu_in1 != ex_out_n.alu_in2;
                         break;
-                    
-                    /* blt */
                     case BLT:
                         br_taken = ex_out_n.alu_in1 < ex_out_n.alu_in2;
                         break;
-                    
-                    /* bge */
                     case BGE:
                         br_taken = ex_out_n.alu_in1 >= ex_out_n.alu_in2;
                         break;   
@@ -643,7 +576,6 @@ struct State execute() {
                 break;
         }
 
-        /* Set the dout_exe: jal / jalr should forward the link address, others should formward the alu_out */
         if (ex_out_n.opcode == JAL || ex_out_n.opcode == JALR){
             dout_exe = ex_out_n.link_addr;
         }else{
@@ -669,10 +601,6 @@ struct State execute_ld_st() {
     ws_mem = 0;
     dout_mem = 0;
 
-    // if(dcache_enabled != 1 || dcache_enabled != 2 || dcache_enabled != 3){
-    //     cache_access_cycles = dmem_access_cycles; // reset to 6 cycles
-    // }
-    
     // operate on the ex_ld_st_out struct when dmem is busy executing a load or store multi-cycle instruction
     if (dmem_busy) {
         dmem_busy = 0; // this is needed if this is the last cycle of load or store execution
@@ -699,10 +627,9 @@ struct State execute_ld_st() {
                 } else if(dcache_enabled == 3){
                     dcache_update_4_way(ex_ld_st_out.mem_addr, ex_ld_st_2_out.cache_line_hit_way);
                 }
+
+                
         }
-
-
-    
 
         // last cycle of a load or store performs the actual memory access
         switch (ex_ld_st_out.opcode) {
@@ -723,10 +650,6 @@ struct State execute_ld_st() {
             default:
                 break;
         }
-
-
-
-
         return ex_ld_st_out;
     }
 
@@ -821,18 +744,15 @@ struct State execute_2nd_ld_st() {
         dmem_busy2 = 0; // this is needed if this is the last cycle of load or store execution
         
         /* Stall for the correct number of cycles */
-        if (++dmem_cycles2 < cache_access_cycles2){
+        if (++dmem_cycles2 < cache_access_cycles2){ // mem in progress
             dmem_busy2 = 1;
             if (ex_ld_st_2_out.opcode == ITYPE_LOAD)
             {
                 we_mem2 = 1;
                 ws_mem2 = ex_ld_st_2_out.rd; 
             }
-
-           
             return ex_ld_st_2_out;
-        /* After X cycles,reset cycles */
-        } else {
+        } else { // last cycle of mem access
             dmem_cycles2 = 1;
             // last cycle update the cache
                  if(dcache_enabled == 1){
@@ -858,7 +778,6 @@ struct State execute_2nd_ld_st() {
 
             case STYPE:
                 memory[ex_ld_st_2_out.mem_addr] = ex_ld_st_2_out.mem_buffer;
-
                 break;
 
             default:
@@ -1258,7 +1177,7 @@ unsigned int BTB_target(unsigned int inst_addr){
     
     /*Retrieves the branch target address from the BTB for a given instruction.
     Logic:
-    - Similar indexing as BTB_lookup.
+    - Similar indexing as BTB_lookup.b
     - Return the target address.*/
 
     uint32_t index;
@@ -1362,7 +1281,6 @@ void direction_update(unsigned int direction,unsigned int inst_addr){
     */
 
 
-
     uint32_t index;
     if(branch_prediction_enabled == 1){
         // 1-level predictor
@@ -1434,14 +1352,16 @@ to be updated, otherwise block 2 is selected. If bit 0 is ‘1’, then bit 1 is
     uint32_t index = (addr_mem >> 4) & 0x3; // extracting index bits 2-3
     uint32_t tag = addr_mem >> 6; // extracting tag bits 6-31
 
+    int lru_block;
+    uint8_t lru_bits = dcache_4_way[index].lru_tree;
+
     if(line >= 0){
         // cache hit: update the cache block
+        lru_block = line;
         dcache_4_way[index].block[line].tag = tag;
         dcache_4_way[index].block[line].valid = 1; // set the valid bit
     } else{
         // cache miss: Find LRU block and update
-        uint8_t lru_bits = dcache_4_way[index].lru_tree;
-        int lru_block;
 
         if ((lru_bits & 0x1) == 0) {
             if ((lru_bits & 0x2) == 0) {
@@ -1459,10 +1379,24 @@ to be updated, otherwise block 2 is selected. If bit 0 is ‘1’, then bit 1 is
 
         dcache_4_way[index].block[lru_block].tag = tag;
         dcache_4_way[index].block[lru_block].valid = 1; // set the valid bit
-
-        // update the LRU tree for the next cycle
-        dcache_4_way[index].lru_tree = (lru_bits & 0x1) ? (lru_bits & 0x2) ? 0b00 : 0b01 : (lru_bits & 0x2) ? 0b10 : 0b11;
     }
+
+    // update the LRU tree for next cycle
+    switch (lru_block)
+    {
+       case 0:
+            dcache_4_way[index].lru_tree = (lru_bits & 0x2) ? 0b11 : 0b10;
+            break;
+        case 1:
+            dcache_4_way[index].lru_tree = (lru_bits & 0x2) ? 0b01 : 0b00;
+            break;
+        case 2:
+            dcache_4_way[index].lru_tree = (lru_bits & 0x1) ? 0b11 : 0b01;
+            break;
+        case 3:
+            dcache_4_way[index].lru_tree = (lru_bits & 0x1) ? 0b10 : 0b00;
+            break;
+    } 
     
 }
 
@@ -1557,6 +1491,5 @@ void dcache_update_DM(unsigned int addr_mem) {
     // cache hit: update the cache block
     dcache_DM[index].block[0].tag = tag;
     dcache_DM[index].block[0].valid = 1; // set the valid bit
-
 
 }
