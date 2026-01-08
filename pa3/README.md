@@ -1,4 +1,4 @@
-# Programming Assignment 3: Dynamic Branch Prediction & Set Associative Data Cache
+#  Dynamic Branch Prediction & Set Associative Data Cache
 
 A 5-stage pipelined CPU simulator for the RISC-V based riscv-uconn instruction set architecture, including a 4-way set associative data cache and dynamic branch prediction support. The simulator translates machine code created by the riscv-uconn assembler, and executes instructions one at a time. Each instruction goes through a Fetch, Decode, Execute, Memory and Writeback stage of processing.
 
